@@ -31,6 +31,15 @@ docs/           : 要件定義・設計資料
 - `scripts/import_items.py`：CSV から `items` / `inventory_items` / `inventory_transactions` を構築するスクリプト
 - `data/seed/仕入品マスタ.csv`：CSV 正データ。これを変更したら再度 `import_items.py` を実行してください。
 
+## 運用 UI：仕入品・仕入先の編集
+
+- `GET /manage/data` - 仕入先一覧・仕入品一覧と、仕入先/仕入品の追加・編集フォームを提供する UI。仕入先には検索ボックスを設けて一覧を絞り込み、仕入品は検索／API 呼び出しで絞り込みながら選択・編集します。既存データをクリックするとフォームに読み込まれ、保存で `/api/suppliers` または `/api/items` に送信します（成功時は画面をリロードして一覧を更新）。
+
+## API: 仕入品・仕入先管理
+
+- `POST /api/suppliers` / `PUT /api/suppliers/{id}`：仕入先名・担当者・備考を受け、同名チェックやリレーションを踏まえて追加/更新します。
+- `POST /api/items` / `PUT /api/items/{id}`：品番・品名・カテゴリ・用途・部署・メーカー・棚番・単位・発注点・仕入先を受け、品番重複を防ぎながら仕入品を追加/更新します。この API が動くことで CSV バッチを使わず Web UI だけでマスタを変更できます。
+
 ## API: 持出し記録
 
 - `POST /api/inventory/issues`

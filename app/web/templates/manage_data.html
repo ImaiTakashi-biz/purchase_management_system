@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>購入品データ管理</title>
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet" />
+  <script src="https://cdn.tailwindcss.com?plugins=forms,typography"></script>
+  <script id="tailwind-config">
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            primary: "#1152d4",
+            "primary-dark": "#0e3c9a",
+          },
+          fontFamily: {
+            display: ["Noto Sans JP", "Inter", "sans-serif"],
+          },
+        },
+      },
+    };
+  </script>
+  <style>
+    body {
+      font-family: "Noto Sans JP", "Inter", sans-serif;
+    }
+    .material-symbols-outlined {
+      font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+    }
+  </style>
+</head>
+<body class="bg-slate-100 text-slate-900 min-h-screen">
+  <header class="sticky top-0 z-30 bg-white border-b border-slate-200 shadow-sm">
+    <div class="max-w-screen-xl mx-auto flex flex-col gap-3 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
+      <div>
+        <p class="text-xs text-slate-500 uppercase tracking-[0.3em]">データ管理</p>
+        <p class="text-2xl font-bold text-slate-900">仕入品・仕入先</p>
+      </div>
+      <div class="flex items-center gap-4 text-xs text-slate-500 sm:gap-6">
+        <span class="material-symbols-outlined text-base">notifications</span>
+        <span>更新: {{ now.strftime('%Y/%m/%d %H:%M') }}</span>
+      </div>
+    </div>
+    <div class="border-t border-slate-100">
+      <div class="max-w-screen-xl mx-auto flex flex-wrap items-center gap-4 px-4 py-2 text-xs uppercase tracking-[0.3em]">
+        {% for link in nav_links %}
+        <a href="{{ link.href }}" class="py-2 {% if link.active %}text-primary border-b-2 border-primary{% else %}text-slate-500 hover:text-slate-900{% endif %}">
+          {{ link.label }}
+        </a>
+        {% endfor %}
+      </div>
+    </div>
+  </header>
+  <main class="max-w-screen-xl mx-auto px-4 py-6 space-y-6">
+    <section class="grid gap-4 lg:grid-cols-2">
+      <article class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm space-y-4">
+        <div>
+          <p class="text-xs uppercase tracking-[0.3em] text-slate-500">仕入先</p>
+          <h2 class="text-lg font-semibold text-slate-900">仕入先を追加／編集</h2>
+        </div>
+        <div class="flex flex-col gap-1">
+          <label class="text-xs text-slate-400">仕入先検索</label>
+          <input id="supplier-search" list="supplier-suggestions" type="search" placeholder="仕入先名で絞り込む" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm" />
+          <datalist id="supplier-suggestions">
+            {% for supplier in suppliers %}
+            <option value="{{ supplier.name }}">{{ supplier.contact_person or '' }}</option>
+            {% endfor %}
+          </datalist>
+        </div>
+        <form id="supplier-form" class="space-y-3">
+          <input type="hidden" id="supplier-id" name="supplier_id" value="" />
+          <label class="flex flex-col gap-1 text-sm text-slate-600">
+            <span class="text-xs text-slate-500">仕入先名</span>
+            <input id="supplier-name" name="name" type="text" required class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm" />
+          </label>
+          <label class="flex flex-col gap-1 text-sm text-slate-600">
+            <span class="text-xs text-slate-500">担当者</span>
+            <input id="supplier-contact" name="contact_person" type="text" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm" />
+          </label>
+          <div class="grid gap-2 md:grid-cols-2">
+            <label class="flex flex-col gap-1 text-sm text-slate-600">
+              <span class="text-xs text-slate-500">携帯</span>
+              <input id="supplier-mobile" name="mobile_number" type="text" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm" />
+            </label>
+            <label class="flex flex-col gap-1 text-sm text-slate-600">
+              <span class="text-xs text-slate-500">電話</span>
+              <input id="supplier-phone" name="phone_number" type="text" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm" />
+            </label>
+          </div>
+          <div class="grid gap-2 md:grid-cols-2">
+            <label class="flex flex-col gap-1 text-sm text-slate-600">
+              <span class="text-xs text-slate-500">メール</span>
+              <input id="supplier-email" name="email" type="email" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm" />
+            </label>
+            <label class="flex flex-col gap-1 text-sm text-slate-600">
+              <span class="text-xs text-slate-500">FAX</span>
+              <input id="supplier-fax" name="fax_number" type="text" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm" />
+            </label>
+          </div>
+          <div class="grid gap-2 md:grid-cols-2">
+            <label class="flex flex-col gap-1 text-sm text-slate-600">
+              <span class="text-xs text-slate-500">担当連絡</span>
+              <input id="supplier-assistant-name" name="assistant_name" type="text" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm" />
+            </label>
+            <label class="flex flex-col gap-1 text-sm text-slate-600">
+              <span class="text-xs text-slate-500">担当メール</span>
+              <input id="supplier-assistant-email" name="assistant_email" type="email" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm" />
+            </label>
+          </div>
+          <label class="flex flex-col gap-1 text-sm text-slate-600">
+            <span class="text-xs text-slate-500">備考</span>
+            <input id="supplier-notes" name="notes" type="text" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm" />
+          </label>
+          <div class="flex items-center gap-2">
+            <button type="submit" class="flex-1 rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-primary-dark">
+              保存
+            </button>
+            <button type="button" id="supplier-form-reset" class="rounded-xl border border-slate-200 px-4 py-2 text-sm text-slate-600 hover:border-slate-300">
+              新規
+            </button>
+          </div>
+        </form>
+        <div id="supplier-list" class="space-y-2">
+          {% for supplier in suppliers %}
+          <div class="px-4 py-3 rounded-2xl border border-slate-100 bg-slate-50 cursor-pointer supplier-row"
+               data-id="{{ supplier.id }}"
+               data-name="{{ supplier.name }}"
+               data-contact="{{ supplier.contact_person or '' }}"
+               data-mobile="{{ supplier.mobile_number or '' }}"
+               data-phone="{{ supplier.phone_number or '' }}"
+               data-email="{{ supplier.email or '' }}"
+               data-assistant-name="{{ supplier.assistant_name or '' }}"
+               data-assistant-email="{{ supplier.assistant_email or '' }}"
+               data-fax="{{ supplier.fax_number or '' }}"
+               data-notes="{{ supplier.notes or '' }}">
+            <div class="flex items-center justify-between">
+              <p class="text-sm font-semibold text-slate-900">{{ supplier.name }}</p>
+              <span class="text-[10px] text-slate-500">ID {{ supplier.id }}</span>
+            </div>
+            <p class="text-[11px] text-slate-500">担当: {{ supplier.contact_person or '未設定' }} / Tel: {{ supplier.phone_number or '－' }}</p>
+            <p class="text-[11px] text-slate-500">Mobile: {{ supplier.mobile_number or '－' }} / Fax: {{ supplier.fax_number or '－' }}</p>
+            <p class="text-[11px] text-slate-500">Mail: {{ supplier.email or '－' }} / 担当連絡: {{ supplier.assistant_name or '－' }}・{{ supplier.assistant_email or '－' }}</p>
+            <p class="text-[11px] text-slate-400">備考: {{ supplier.notes or '－' }}</p>
+          </div>
+          {% endfor %}
+        </div>
+      </article>
+      <article class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm space-y-4">
+        <div>
+          <p class="text-xs uppercase tracking-[0.3em] text-slate-500">仕入品</p>
+          <h2 class="text-lg font-semibold text-slate-900">仕入品を追加／編集</h2>
+        </div>
+        <div class="flex flex-col gap-1">
+          <label class="text-xs text-slate-400">仕入品検索</label>
+          <div class="flex gap-2">
+            <input id="item-search-input" list="item-suggestions" type="search" placeholder="品番・品名などで検索" class="flex-1 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm" />
+            <datalist id="item-suggestions">
+              {% for item in items %}
+              <option value="{{ item.item_code }} - {{ item.name }}"></option>
+              {% endfor %}
+            </datalist>
+            <button type="button" id="item-search-button" class="rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-primary-dark">
+              検索
+            </button>
+          </div>
+        </div>
+        <form id="item-form" class="space-y-3">
+          <input type="hidden" id="item-id" name="item_id" value="" />
+          <label class="flex flex-col gap-1 text-sm text-slate-600">
+            <span class="text-xs text-slate-500">品番</span>
+            <input id="item-code" name="item_code" type="text" required class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm" />
+          </label>
+          <div class="grid gap-2 md:grid-cols-2">
+            <label class="flex flex-col gap-1 text-sm text-slate-600">
+              <span class="text-xs text-slate-500">カテゴリ（種類）</span>
+              <input id="item-type" name="item_type" type="text" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm" />
+            </label>
+            <label class="flex flex-col gap-1 text-sm text-slate-600">
+              <span class="text-xs text-slate-500">用途</span>
+              <input id="item-usage" name="usage" type="text" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm" />
+            </label>
+          </div>
+          <div class="grid gap-2 md:grid-cols-2">
+            <label class="flex flex-col gap-1 text-sm text-slate-600">
+              <span class="text-xs text-slate-500">部署</span>
+              <input id="item-department" name="department" type="text" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm" />
+            </label>
+            <label class="flex flex-col gap-1 text-sm text-slate-600">
+              <span class="text-xs text-slate-500">メーカー</span>
+              <input id="item-manufacturer" name="manufacturer" type="text" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm" />
+            </label>
+          </div>
+          <div class="grid gap-2 md:grid-cols-2">
+            <label class="flex flex-col gap-1 text-sm text-slate-600">
+              <span class="text-xs text-slate-500">棚番</span>
+              <input id="item-shelf" name="shelf" type="text" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm" />
+            </label>
+          </div>
+          <div class="grid gap-2 md:grid-cols-2 items-end">
+            <label class="flex flex-col gap-1 text-sm text-slate-600">
+              <span class="text-xs text-slate-500">発注点</span>
+              <input id="item-reorder" name="reorder_point" type="number" min="0" value="0" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm" />
+            </label>
+            <label class="flex flex-col gap-1 text-sm text-slate-600">
+              <span class="text-xs text-slate-500">仕入先</span>
+              <select id="item-supplier" name="supplier_id" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm">
+                <option value="">未選択</option>
+                {% for supplier in suppliers %}
+                <option value="{{ supplier.id }}">{{ supplier.name }}</option>
+                {% endfor %}
+              </select>
+            </label>
+          </div>
+          <div class="flex items-center gap-2">
+            <button type="submit" class="flex-1 rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-primary-dark">
+              保存
+            </button>
+            <button type="button" id="item-form-reset" class="rounded-xl border border-slate-200 px-4 py-2 text-sm text-slate-600 hover:border-slate-300">
+              新規
+            </button>
+          </div>
+        </form>
+        <div id="item-list" class="space-y-2">
+          <!-- 項目はJSでレンダリング -->
+        </div>
+      </article>
+    </section>
+  </main>
+  <script id="initial-items-data" type="application/json">
+    {{ items_data | tojson | safe }}
+  </script>
+  <script>
+    document.addEventListener('DOMContentLoaded', function () {
+      const supplierForm = document.getElementById('supplier-form');
+      const supplierIdInput = document.getElementById('supplier-id');
+      const supplierNameInput = document.getElementById('supplier-name');
+      const supplierContactInput = document.getElementById('supplier-contact');
+      const supplierMobileInput = document.getElementById('supplier-mobile');
+      const supplierPhoneInput = document.getElementById('supplier-phone');
+      const supplierEmailInput = document.getElementById('supplier-email');
+      const supplierFaxInput = document.getElementById('supplier-fax');
+      const supplierAssistantNameInput = document.getElementById('supplier-assistant-name');
+      const supplierAssistantEmailInput = document.getElementById('supplier-assistant-email');
+      const supplierNotesInput = document.getElementById('supplier-notes');
+      const supplierReset = document.getElementById('supplier-form-reset');
+      const supplierSearch = document.getElementById('supplier-search');
+      let supplierRows = Array.from(document.querySelectorAll('.supplier-row'));
+
+      const itemForm = document.getElementById('item-form');
+      const itemIdInput = document.getElementById('item-id');
+      const itemCodeInput = document.getElementById('item-code');
+      const itemTypeInput = document.getElementById('item-type');
+      const itemUsageInput = document.getElementById('item-usage');
+      const itemDepartmentInput = document.getElementById('item-department');
+      const itemManufacturerInput = document.getElementById('item-manufacturer');
+      const itemShelfInput = document.getElementById('item-shelf');
+      const itemReorderInput = document.getElementById('item-reorder');
+      const itemSupplierSelect = document.getElementById('item-supplier');
+      const itemReset = document.getElementById('item-form-reset');
+      const itemList = document.getElementById('item-list');
+      const itemSearchInput = document.getElementById('item-search-input');
+      const itemSearchButton = document.getElementById('item-search-button');
+
+      const initialItemsElement = document.getElementById('initial-items-data');
+      const initialItems = initialItemsElement
+        ? JSON.parse(initialItemsElement.textContent || '[]')
+        : [];
+
+      const resetSupplierForm = () => {
+        supplierIdInput.value = '';
+        supplierNameInput.value = '';
+        supplierContactInput.value = '';
+        supplierMobileInput.value = '';
+        supplierPhoneInput.value = '';
+        supplierEmailInput.value = '';
+        supplierFaxInput.value = '';
+        supplierAssistantNameInput.value = '';
+        supplierAssistantEmailInput.value = '';
+        supplierNotesInput.value = '';
+      };
+      const resetItemForm = () => {
+        itemIdInput.value = '';
+        itemCodeInput.value = '';
+        itemTypeInput.value = '';
+        itemUsageInput.value = '';
+        itemDepartmentInput.value = '';
+        itemManufacturerInput.value = '';
+        itemShelfInput.value = '';
+        itemReorderInput.value = '0';
+        itemSupplierSelect.value = '';
+      };
+
+      const bindSupplierRows = () => {
+        supplierRows.forEach((row) => {
+          row.addEventListener('click', () => {
+            supplierIdInput.value = row.dataset.id || '';
+            supplierNameInput.value = row.dataset.name || '';
+            supplierContactInput.value = row.dataset.contact || '';
+            supplierMobileInput.value = row.dataset.mobile || '';
+            supplierPhoneInput.value = row.dataset.phone || '';
+            supplierEmailInput.value = row.dataset.email || '';
+            supplierFaxInput.value = row.dataset.fax || '';
+            supplierAssistantNameInput.value = row.dataset.assistantName || '';
+            supplierAssistantEmailInput.value = row.dataset.assistantEmail || '';
+            supplierNotesInput.value = row.dataset.notes || '';
+            supplierForm?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          });
+        });
+      };
+
+      const filterSuppliers = (query) => {
+        const normalized = query.trim().toLowerCase();
+        supplierRows.forEach((row) => {
+          const name = (row.dataset.name || '').toLowerCase();
+          row.style.display = normalized && !name.includes(normalized) ? 'none' : '';
+        });
+      };
+
+      const createItemRow = (item) => {
+        const row = document.createElement('div');
+        row.className = 'px-4 py-3 rounded-2xl border border-slate-100 bg-slate-50 cursor-pointer item-row';
+        row.dataset.id = item.id;
+        row.dataset.code = item.item_code;
+        row.dataset.name = item.name;
+        row.dataset.type = item.item_type || '';
+        row.dataset.usage = item.usage || '';
+        row.dataset.department = item.department || '';
+        row.dataset.manufacturer = item.manufacturer || '';
+        row.dataset.shelf = item.shelf || '';
+        row.dataset.unit = item.unit || '';
+        row.dataset.reorder = item.reorder_point ?? 0;
+        row.dataset.supplier = item.supplier_id || '';
+        row.dataset.supplierName = item.supplier_name || '';
+        row.innerHTML = `
+          <div class="flex items-center justify-between">
+            <p class="text-sm font-semibold text-slate-900">${item.item_code} - ${item.name}</p>
+            <span class="text-[10px] text-slate-500">ID ${item.id}</span>
+          </div>
+          <p class="text-[11px] text-slate-500">
+            ${item.item_type || '種類未設定'} / ${item.usage || '用途未設定'}
+          </p>
+          <p class="text-[11px] text-slate-400">
+            棚番 ${item.shelf || '未設定'} / 部署 ${item.department || '未設定'} / 仕入先 ${item.supplier_name || '未設定'}
+          </p>
+        `;
+        return row;
+      };
+
+      let currentItemRows = [];
+      const bindItemRowListeners = () => {
+        currentItemRows = Array.from(document.querySelectorAll('.item-row'));
+        currentItemRows.forEach((row) => {
+          row.addEventListener('click', () => {
+            itemIdInput.value = row.dataset.id || '';
+            itemCodeInput.value = row.dataset.code || '';
+            itemTypeInput.value = row.dataset.type || '';
+            itemUsageInput.value = row.dataset.usage || '';
+            itemDepartmentInput.value = row.dataset.department || '';
+            itemManufacturerInput.value = row.dataset.manufacturer || '';
+            itemShelfInput.value = row.dataset.shelf || '';
+            itemReorderInput.value = row.dataset.reorder || '0';
+            itemSupplierSelect.value = row.dataset.supplier || '';
+            itemForm?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          });
+        });
+      };
+
+      const renderItemList = (items) => {
+        if (!itemList) {
+          return;
+        }
+        itemList.innerHTML = '';
+        const fragment = document.createDocumentFragment();
+        items.forEach((item) => fragment.appendChild(createItemRow(item)));
+        itemList.appendChild(fragment);
+        bindItemRowListeners();
+      };
+
+      const fetchItems = async (query = '') => {
+        if (!itemList) {
+          return;
+        }
+        const params = new URLSearchParams();
+        if (query) {
+          params.append('q', query);
+        }
+        try {
+          const response = await fetch(`/api/items?${params.toString()}`);
+          if (!response.ok) {
+            return;
+          }
+          const data = await response.json();
+          renderItemList(data.items || []);
+        } catch (error) {
+          console.error('検索に失敗しました', error);
+        }
+      };
+
+      renderItemList(initialItems);
+
+      supplierSearch?.addEventListener('input', (event) => {
+        filterSuppliers(event.target.value);
+      });
+
+      supplierForm?.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const payload = {
+          name: supplierNameInput.value.trim(),
+          contact_person: supplierContactInput.value.trim(),
+          mobile_number: supplierMobileInput.value.trim(),
+          phone_number: supplierPhoneInput.value.trim(),
+          email: supplierEmailInput.value.trim(),
+          fax_number: supplierFaxInput.value.trim(),
+          assistant_name: supplierAssistantNameInput.value.trim(),
+          assistant_email: supplierAssistantEmailInput.value.trim(),
+          notes: supplierNotesInput.value.trim(),
+        };
+        if (!payload.name) {
+          alert('仕入先名は必須です。');
+          return;
+        }
+        const id = supplierIdInput.value.trim();
+        const url = id ? `/api/suppliers/${id}` : '/api/suppliers';
+        const method = id ? 'PUT' : 'POST';
+        try {
+          const response = await fetch(url, {
+            method,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          if (!response.ok) {
+            const error = await response.json().catch(() => null);
+            throw new Error(error?.detail || '仕入先の保存に失敗しました。');
+          }
+          resetSupplierForm();
+          location.reload();
+        } catch (error) {
+          alert(error.message);
+        }
+      });
+
+      itemForm?.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const payload = {
+          item_code: itemCodeInput.value.trim(),
+          item_type: itemTypeInput.value.trim(),
+          usage: itemUsageInput.value.trim(),
+          department: itemDepartmentInput.value.trim(),
+          manufacturer: itemManufacturerInput.value.trim(),
+          shelf: itemShelfInput.value.trim(),
+          reorder_point: Number(itemReorderInput.value) || 0,
+          supplier_id: itemSupplierSelect.value ? Number(itemSupplierSelect.value) : null,
+        };
+        if (!payload.item_code || !payload.name) {
+          alert('品番と品名は必須です。');
+          return;
+        }
+        const id = itemIdInput.value.trim();
+        const url = id ? `/api/items/${id}` : '/api/items';
+        const method = id ? 'PUT' : 'POST';
+        try {
+          const response = await fetch(url, {
+            method,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          if (!response.ok) {
+            const error = await response.json().catch(() => null);
+            throw new Error(error?.detail || '仕入品の保存に失敗しました。');
+          }
+          resetItemForm();
+          location.reload();
+        } catch (error) {
+          alert(error.message);
+        }
+      });
+
+      itemSearchButton?.addEventListener('click', () => {
+        fetchItems(itemSearchInput?.value || '');
+      });
+
+      itemSearchInput?.addEventListener('keyup', (event) => {
+        if (event.key === 'Enter') {
+          fetchItems(itemSearchInput.value || '');
+        }
+      });
+
+      supplierReset?.addEventListener('click', resetSupplierForm);
+      itemReset?.addEventListener('click', resetItemForm);
+      bindSupplierRows();
+    });
+  </script>
+</body>
+</html>

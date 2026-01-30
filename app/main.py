@@ -11,11 +11,11 @@ from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import nullsfirst, select
+from sqlalchemy import nullsfirst, select, or_
 from sqlalchemy.orm import Session, selectinload
 
 from app.db.session import init_db, get_db
-from app.models.tables import InventoryItem, InventoryTransaction, Item, TransactionType
+from app.models.tables import InventoryItem, InventoryTransaction, Item, Supplier, TransactionType
 from pydantic import BaseModel
 from zoneinfo import ZoneInfo
 
@@ -46,6 +46,24 @@ class InlineAdjustmentPayload(BaseModel):
     item_code: str
     target_quantity: int
 
+
+class SupplierPayload(BaseModel):
+    name: str
+    contact_person: Optional[str] = ""
+    notes: Optional[str] = ""
+
+
+class ItemPayload(BaseModel):
+    item_code: str
+    name: str
+    item_type: Optional[str] = ""
+    usage: Optional[str] = ""
+    department: Optional[str] = ""
+    manufacturer: Optional[str] = ""
+    shelf: Optional[str] = ""
+    unit: Optional[str] = ""
+    reorder_point: int = 0
+    supplier_id: Optional[int] = None
 
 class IssueRecordRequest(BaseModel):
     item_code: str
@@ -261,12 +279,20 @@ RECENT_TRANSACTIONS: List[Dict[str, str]] = [
     },
 ]
 
-NAV_LINKS = [
-    {'label': 'ダッシュボード', 'href': '#', 'active': False},
-    {'label': '在庫管理', 'href': '/inventory', 'active': True},
-    {'label': '発注管理', 'href': '#', 'active': False},
-    {'label': '納品管理', 'href': '#', 'active': False},
+BASE_NAV_LINKS = [
+    {'label': 'ダッシュボード', 'href': '#'},
+    {'label': '在庫管理', 'href': '/inventory'},
+    {'label': '発注管理', 'href': '#'},
+    {'label': '納品管理', 'href': '#'},
+    {'label': 'データ管理', 'href': '/manage/data'},
 ]
+
+
+def build_nav_links(active_href: str) -> List[Dict[str, object]]:
+    return [
+        {'label': link['label'], 'href': link['href'], 'active': link['href'] == active_href}
+        for link in BASE_NAV_LINKS
+    ]
 
 DELIVERIES_TODAY = 4
 
@@ -694,7 +720,7 @@ def inventory_index(
     alert_message = message.strip()
     context = {
         'request': request,
-        'nav_links': NAV_LINKS,
+        'nav_links': build_nav_links('/inventory'),
         'sidebar_structure': build_sidebar_structure(snapshots),
         'category_options': build_category_options(snapshots),
         'selected_category': selected_category,
@@ -867,3 +893,189 @@ def inventory_inline_adjust(
     )
     last_tx = db.scalar(last_tx_stmt)
     return build_inventory_status_payload(item, inventory_item, last_tx)
+
+
+@app.get('/manage/data', response_class=HTMLResponse)
+def manage_data(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    suppliers = db.scalars(select(Supplier).order_by(Supplier.name.asc())).all()
+    items = (
+        db.scalars(select(Item).options(selectinload(Item.supplier)).order_by(Item.item_code.asc()))
+        .all()
+    )
+    items_data = [
+        {
+            "id": item.id,
+            "item_code": item.item_code,
+            "name": item.name,
+            "item_type": item.item_type or "",
+            "usage": item.usage or "",
+            "department": item.department or "",
+            "manufacturer": item.manufacturer or "",
+            "shelf": item.shelf or "",
+            "unit": item.unit or "",
+            "reorder_point": item.reorder_point or 0,
+            "supplier_id": item.supplier_id,
+            "supplier_name": item.supplier.name if item.supplier else "",
+        }
+        for item in items
+    ]
+    context = {
+        'request': request,
+        'nav_links': build_nav_links('/manage/data'),
+        'suppliers': suppliers,
+        'items_data': items_data,
+        'now': datetime.now(JST_ZONE),
+    }
+    return templates.TemplateResponse('manage_data.html', context)
+
+
+@app.post('/api/suppliers')
+def create_supplier(
+    payload: SupplierPayload,
+    db: Session = Depends(get_db),
+) -> Dict[str, object]:
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="仕入先名は必須です。")
+    existing = db.scalar(select(Supplier).filter(Supplier.name == name))
+    if existing:
+        raise HTTPException(status_code=400, detail="同名の仕入先が既に存在します。")
+    supplier = Supplier(
+        name=name,
+        contact_person=payload.contact_person.strip() or None,
+        notes=payload.notes.strip() or None,
+    )
+    db.add(supplier)
+    db.commit()
+    db.refresh(supplier)
+    return {'id': supplier.id, 'name': supplier.name}
+
+
+@app.put('/api/suppliers/{supplier_id}')
+def update_supplier(
+    supplier_id: int,
+    payload: SupplierPayload,
+    db: Session = Depends(get_db),
+) -> Dict[str, object]:
+    supplier = db.scalar(select(Supplier).filter(Supplier.id == supplier_id))
+    if not supplier:
+        raise HTTPException(status_code=404, detail="仕入先が見つかりません。")
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="仕入先名は必須です。")
+    duplicate = (
+        db.scalar(select(Supplier).filter(Supplier.name == name, Supplier.id != supplier_id))
+        or None
+    )
+    if duplicate:
+        raise HTTPException(status_code=400, detail="同名の仕入先が既に存在します。")
+    supplier.name = name
+    supplier.contact_person = payload.contact_person.strip() or None
+    supplier.notes = payload.notes.strip() or None
+    db.commit()
+    return {'id': supplier.id, 'name': supplier.name}
+
+
+def _resolve_supplier(db: Session, supplier_id: Optional[int]) -> Optional[Supplier]:
+    if supplier_id is None:
+        return None
+    return db.scalar(select(Supplier).filter(Supplier.id == supplier_id))
+
+
+@app.post('/api/items')
+def create_item(
+    payload: ItemPayload,
+    db: Session = Depends(get_db),
+) -> Dict[str, object]:
+    if not payload.item_code.strip() or not payload.name.strip():
+        raise HTTPException(status_code=400, detail="品番と品名は必須です。")
+    existing = db.scalar(select(Item).filter(Item.item_code == payload.item_code.strip()))
+    if existing:
+        raise HTTPException(status_code=400, detail="同一品番が存在します。")
+    supplier = _resolve_supplier(db, payload.supplier_id)
+    item = Item(
+        item_code=payload.item_code.strip(),
+        name=payload.name.strip(),
+        item_type=payload.item_type.strip() or None,
+        usage=payload.usage.strip() or None,
+        department=payload.department.strip() or None,
+        manufacturer=payload.manufacturer.strip() or None,
+        shelf=payload.shelf.strip() or None,
+        unit=payload.unit.strip() or None,
+        reorder_point=max(0, payload.reorder_point),
+        supplier_id=supplier.id if supplier else None,
+    )
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    inventory_item = InventoryItem(item_id=item.id, quantity_on_hand=0)
+    db.add(inventory_item)
+    db.commit()
+    return {'id': item.id, 'item_code': item.item_code}
+
+
+@app.put('/api/items/{item_id}')
+def update_item(
+    item_id: int,
+    payload: ItemPayload,
+    db: Session = Depends(get_db),
+) -> Dict[str, object]:
+    item = db.scalar(select(Item).filter(Item.id == item_id))
+    if not item:
+        raise HTTPException(status_code=404, detail="仕入品が見つかりません。")
+    if not payload.item_code.strip() or not payload.name.strip():
+        raise HTTPException(status_code=400, detail="品番と品名は必須です。")
+    if payload.item_code.strip() != item.item_code:
+        duplicate = db.scalar(select(Item).filter(Item.item_code == payload.item_code.strip(), Item.id != item_id))
+        if duplicate:
+            raise HTTPException(status_code=400, detail="同一品番が存在します。")
+        item.item_code = payload.item_code.strip()
+    supplier = _resolve_supplier(db, payload.supplier_id)
+    item.name = payload.name.strip()
+    item.item_type = payload.item_type.strip() or None
+    item.usage = payload.usage.strip() or None
+    item.department = payload.department.strip() or None
+    item.manufacturer = payload.manufacturer.strip() or None
+    item.shelf = payload.shelf.strip() or None
+    item.unit = payload.unit.strip() or None
+    item.reorder_point = max(0, payload.reorder_point)
+    item.supplier_id = supplier.id if supplier else None
+    db.commit()
+    return {'id': item.id, 'item_code': item.item_code}
+
+
+@app.get('/api/items')
+def search_items(
+    q: str = Query('', alias='q'),
+    limit: int = Query(20, ge=1, le=50),
+    db: Session = Depends(get_db),
+) -> Dict[str, List[Dict[str, object]]]:
+    stmt = select(Item).options(selectinload(Item.supplier))
+    if q:
+        pattern = f"%{q}%"
+        stmt = stmt.filter(
+            or_(Item.item_code.ilike(pattern), Item.name.ilike(pattern))
+        )
+    stmt = stmt.order_by(Item.item_code.asc()).limit(limit)
+    items = db.scalars(stmt).all()
+    results = [
+        {
+            "id": item.id,
+            "item_code": item.item_code,
+            "name": item.name,
+            "item_type": item.item_type or "",
+            "usage": item.usage or "",
+            "department": item.department or "",
+            "manufacturer": item.manufacturer or "",
+            "shelf": item.shelf or "",
+            "unit": item.unit or "",
+            "reorder_point": item.reorder_point or 0,
+            "supplier_id": item.supplier_id,
+            "supplier_name": item.supplier.name if item.supplier else "",
+        }
+        for item in items
+    ]
+    return {"items": results}
