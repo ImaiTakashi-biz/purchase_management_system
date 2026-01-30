@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>在庫一覧 - 購入品一元管理</title>
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet" />
+  <script src="https://cdn.tailwindcss.com?plugins=forms,typography"></script>
+  <script id="tailwind-config">
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            primary: "#1152d4",
+            "primary-dark": "#0e3c9a",
+          },
+          fontFamily: {
+            display: ["Noto Sans JP", "Inter", "sans-serif"],
+          },
+        },
+      },
+    };
+  </script>
+  <style>
+    body {
+      font-family: "Noto Sans JP", "Inter", sans-serif;
+    }
+    .material-symbols-outlined {
+      font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+    }
+  </style>
+</head>
+  <body class="bg-slate-100 text-slate-900">
+  <header class="sticky top-0 z-30 bg-white border-b border-slate-200">
+    <div class="max-w-screen-xl mx-auto flex flex-col gap-3 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
+      <div>
+        <p class="text-xs text-slate-500 uppercase tracking-[0.3em]">社内向け購買管理</p>
+        <p class="text-2xl font-bold text-slate-900">在庫一覧</p>
+      </div>
+      <div class="flex items-center gap-4 text-xs text-slate-500 sm:gap-6">
+        <span class="material-symbols-outlined text-base">notifications</span>
+        <span>最終更新：{{ now.strftime('%Y年%m月%d日 %H:%M') }}</span>
+      </div>
+    </div>
+    <div class="border-t border-slate-100">
+      <div class="max-w-screen-xl mx-auto flex flex-wrap items-center gap-4 px-4 py-2 text-xs uppercase tracking-[0.3em]">
+        {% for link in nav_links %}
+        <a href="{{ link.href }}" class="py-2 {% if link.active %}text-primary border-b-2 border-primary{% else %}text-slate-500 hover:text-slate-900{% endif %}">{{ link.label }}</a>
+        {% endfor %}
+      </div>
+    </div>
+  </header>
+  <div class="flex flex-1 overflow-hidden">
+    <aside class="hidden lg:flex w-72 flex-shrink-0 flex-col border-r border-slate-200 bg-white">
+      <div class="px-5 py-6 border-b border-slate-200">
+        <div class="flex items-center justify-between">
+          <div>
+            <p class="text-xs text-slate-500 uppercase tracking-[0.3em]">部署別用途</p>
+            <p class="text-lg font-bold text-slate-900">用途ツリー</p>
+          </div>
+        </div>
+      </div>
+      <div class="flex-1 overflow-y-auto px-5 py-6 space-y-5">
+        {% for section in sidebar_structure %}
+        <div class="space-y-2">
+          <div class="flex items-center justify-between">
+            <p class="text-sm font-semibold text-slate-900">{{ section.name if section.name else '未設定' }}</p>
+            <span class="text-[11px] text-slate-400">{{ section.categories|length }}カテゴリ</span>
+          </div>
+          <div class="flex flex-wrap gap-2">
+            {% for cat in section.categories %}
+            {% set is_active = (selected_usage == cat.name) and (selected_department == section.name) %}
+            <a href="{{ build_inventory_url(keyword, selected_category, selected_usage, usage=cat.name, department=section.name, category_override='') }}" class="rounded-full border px-3 py-1 text-xs {% if is_active %}border-primary bg-primary/10 text-primary{% else %}border-slate-200 bg-slate-50 text-slate-600{% endif %}">
+              {{ cat.name }}
+            </a>
+            {% endfor %}
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </aside>
+    <main class="flex-1 overflow-y-auto bg-slate-100">
+      <div class="max-w-screen-xl mx-auto px-4 py-6 space-y-6">
+        <section class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {% for card in kpi_cards %}
+          <article class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div class="flex items-center justify-between text-xs text-slate-500 uppercase tracking-[0.3em]">
+              <span>{{ card.label }}</span>
+              <span class="material-symbols-outlined text-lg text-slate-400">{{ card.icon }}</span>
+            </div>
+            <p class="mt-3 text-3xl font-bold text-slate-900">{{ card.value }}</p>
+            <p class="text-xs text-slate-500">{{ card.note }}</p>
+          </article>
+          {% endfor %}
+        </section>
+        <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm space-y-4">
+          <form method="get" action="/inventory" class="grid gap-3 lg:grid-cols-3">
+            <label class="flex flex-col gap-2 text-sm">
+              <span class="text-slate-500 font-semibold">検索</span>
+              <input type="text" name="q" value="{{ keyword }}" placeholder="品番・品名・部署・カテゴリ" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm focus:border-primary focus:ring-1 focus:ring-primary outline-none">
+            </label>
+            <label class="flex flex-col gap-2 text-sm">
+              <span class="text-slate-500 font-semibold">種類</span>
+              <select name="category" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm focus:border-primary focus:ring-1 focus:ring-primary outline-none">
+                <option value="">すべて</option>
+                {% for cat in type_options %}
+                <option value="{{ cat }}" {% if cat == selected_category %}selected{% endif %}>{{ cat }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <button type="submit" class="rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-white transition hover:bg-primary-dark">絞り込み</button>
+          </form>
+          {% if alert_message %}
+          <div class="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-700">
+            {{ alert_message }}
+          </div>
+          {% endif %}
+          <div class="flex flex-wrap gap-2 text-xs">
+            <a href="{{ build_inventory_url(keyword, selected_category, selected_usage, department=selected_department, category_override='') }}" class="rounded-full border px-3 py-1 {% if not selected_category %}border-primary bg-primary/10 text-primary{% else %}border-slate-200 bg-slate-50 text-slate-600{% endif %}">すべて</a>
+            {% for cat in type_options %}
+            <a href="{{ build_inventory_url(keyword, selected_category, selected_usage, department=selected_department, category_override=cat) }}" class="rounded-full border px-3 py-1 {% if cat == selected_category %}border-primary bg-primary/10 text-primary{% else %}border-slate-200 bg-slate-50 text-slate-600{% endif %}">{{ cat }}</a>
+            {% endfor %}
+          </div>
+          <p class="text-[11px] text-slate-400">在庫数量の変更はすべてトランザクション（入庫/出庫/調整）で実施してください。</p>
+        </section>
+        <section class="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+          <div class="flex items-center justify-between border-b border-slate-100 px-6 py-3 text-sm font-semibold text-slate-700">
+            <span>在庫一覧（{{ filtered_count }} / {{ total_items }} 件）</span>
+            <span class="text-xs text-slate-500">CSVを正とした在庫マスタから表示</span>
+          </div>
+          <div class="overflow-x-auto">
+            <table class="min-w-full text-left text-sm">
+              <thead class="bg-slate-50 text-[11px] uppercase tracking-wide text-slate-500">
+                <tr>
+                  <th class="px-6 py-3 text-left">棚番</th>
+                  <th class="px-6 py-3 text-left">品番</th>
+                  <th class="px-6 py-3 text-left">メーカー名</th>
+                  <th class="px-6 py-3 text-center">在庫数</th>
+                  <th class="px-6 py-3 text-center">発注点</th>
+                  <th class="px-6 py-3 text-center">差分</th>
+                  <th class="px-6 py-3 text-center">状態</th>
+                  <th class="px-6 py-3 text-left">最終取引</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-100">
+                {% for item in filtered_items %}
+                <tr class="hover:bg-slate-50 cursor-pointer"
+                    data-item-code="{{ item.item_code }}"
+                    data-item-name="{{ item.name }}"
+                    data-item-shelf="{{ item.shelf or '未設定' }}"
+                    data-item-manufacturer="{{ item.manufacturer }}"
+                    data-item-on-hand="{{ item.on_hand_value }}"
+                    data-item-reorder="{{ item.reorder_point }}"
+                    data-item-difference="{{ item.stock_gap_label }}"
+                    data-item-status="{{ item.status_label }}"
+                    data-item-status-badge="{{ item.status_badge }}"
+                    data-item-supplier="{{ item.supplier }}"
+                    data-item-last-activity="{{ item.last_activity }}"
+                    data-item-last-updated="{{ item.last_updated }}"
+                >
+                  <td class="px-6 py-4 text-left text-slate-700">
+                    {{ item.shelf or '未設定' }}
+                  </td>
+                  <td class="px-6 py-4 font-semibold text-slate-800">{{ item.item_code }}</td>
+                  <td class="px-6 py-4 text-slate-600">{{ item.manufacturer }}</td>
+                  <td class="px-6 py-4 text-center text-slate-900">{{ item.on_hand }}</td>
+                  <td class="px-6 py-4 text-center text-slate-600">{{ item.reorder_point }}</td>
+                  <td class="px-6 py-4 text-center">
+                    <span data-role="stock-gap" class="text-xs font-semibold {% if item.stock_gap >= 0 %}text-emerald-600{% else %}text-red-600{% endif %}">{{ item.stock_gap_label }}</span>
+                  </td>
+                  <td class="px-6 py-4 text-center">
+                    <span data-role="status-badge" class="status-badge inline-flex items-center justify-center rounded-full border px-3 py-1 text-[11px] font-semibold tracking-wide {{ item.status_badge }}">{{ item.status_label }}</span>
+                  </td>
+                  <td class="px-6 py-4">
+                    <p data-role="last-activity" class="text-sm font-semibold text-slate-900">{{ item.last_activity }}</p>
+                    <p data-role="last-updated" class="text-[11px] text-slate-500">{{ item.last_updated }}</p>
+                    <p data-role="supplier" class="text-[11px] text-slate-400">{{ item.supplier }}</p>
+                  </td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </section>
+        <section class="rounded-2xl border border-slate-200 bg-white shadow-sm p-5 space-y-4">
+          <div>
+            <p class="text-xs uppercase tracking-[0.3em] text-slate-500">運用操作</p>
+            <h2 class="text-lg font-semibold text-slate-900">持出し記録</h2>
+          </div>
+          <form method="post" action="/inventory/issues" class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <input
+              type="hidden"
+              name="next"
+              value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}"
+            />
+            <label class="flex flex-col text-sm text-slate-600">
+              <span class="text-xs text-slate-500">品目</span>
+              <select name="item_code" required class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">
+                {% for row in filtered_items %}
+                <option value="{{ row.item_code }}">{{ row.item_code }} - {{ row.name }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <label class="flex flex-col text-sm text-slate-600">
+              <span class="text-xs text-slate-500">数量</span>
+              <input name="quantity" type="number" min="1" value="1" required class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">
+            </label>
+            <label class="flex flex-col text-sm text-slate-600">
+              <span class="text-xs text-slate-500">理由</span>
+              <input name="reason" type="text" value="使用持出" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">
+            </label>
+            <label class="flex flex-col text-sm text-slate-600">
+              <span class="text-xs text-slate-500">担当者（任意）</span>
+              <input name="created_by" type="text" placeholder="山田太郎" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">
+            </label>
+            <div class="flex items-end">
+              <button type="submit" class="w-full rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-primary-dark">
+                出庫を記録する
+              </button>
+            </div>
+          </form>
+          <p class="text-[11px] text-slate-400">出庫記録は在庫数に反映され、履歴にも残ります。</p>
+        </section>
+        <section class="rounded-2xl border border-slate-200 bg-white shadow-sm p-5 space-y-4">
+          <div class="flex items-center justify-between">
+            <div>
+              <p class="text-xs text-slate-500 uppercase tracking-[0.3em]">履歴</p>
+              <h2 class="text-lg font-semibold text-slate-900">直近トランザクション</h2>
+            </div>
+            <span class="text-xs text-slate-500">現場入力 / 直近{{ recent_transactions|length }}件</span>
+          </div>
+          <div class="divide-y divide-slate-100">
+            {% for tx in recent_transactions %}
+            <div class="flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p class="text-sm font-semibold text-slate-900">{{ tx.item }}</p>
+                <p class="text-[11px] text-slate-500">{{ tx.date }}・{{ tx.department }}</p>
+              </div>
+              <div class="flex flex-wrap items-center gap-3 text-xs text-slate-600">
+                <span class="rounded-full border border-slate-200 px-3 py-1">{{ tx.type }}</span>
+                <span class="text-slate-900 font-bold">{{ tx.delta }}</span>
+                <span class="text-slate-500">{{ tx.note }}</span>
+              </div>
+            </div>
+            {% endfor %}
+          </div>
+        </section>
+      </div>
+    </main>
+    <div id="inventory-modal" class="fixed inset-0 hidden z-50 items-center justify-center px-4 py-6">
+      <div class="absolute inset-0 bg-slate-900/40" data-modal-close></div>
+      <div class="relative w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl">
+        <button type="button" class="absolute right-3 top-3 text-slate-400 transition hover:text-slate-600" data-modal-close aria-label="閉じる">
+          <span class="material-symbols-outlined">close</span>
+        </button>
+        <div class="space-y-3">
+          <p class="text-xs uppercase tracking-[0.3em] text-slate-500">在庫操作</p>
+          <div>
+            <p id="inventory-modal-item-name" class="text-lg font-semibold text-slate-900">-</p>
+            <p id="inventory-modal-item-code" class="text-sm text-slate-500">-</p>
+          </div>
+          <div class="grid gap-2 text-sm text-slate-500">
+            <div class="flex justify-between">
+              <span>棚番</span>
+              <span id="inventory-modal-shelf">未設定</span>
+            </div>
+            <div class="flex justify-between">
+              <span>メーカー</span>
+              <span id="inventory-modal-manufacturer">-</span>
+            </div>
+          </div>
+          <div class="space-y-2">
+            <p class="text-xs text-slate-400">在庫数</p>
+            <div class="flex items-center justify-between gap-3 rounded-xl border border-slate-200 px-3 py-2 text-3xl font-bold text-slate-900">
+              <button type="button" id="inventory-modal-decrement" class="h-10 w-10 rounded-full border border-slate-200 text-2xl text-slate-600 transition hover:border-slate-400 hover:text-slate-900">-</button>
+              <span id="inventory-modal-count" class="text-3xl font-bold cursor-pointer select-none">0</span>
+              <button type="button" id="inventory-modal-increment" class="h-10 w-10 rounded-full border border-slate-200 text-2xl text-slate-600 transition hover:border-slate-400 hover:text-slate-900">+</button>
+            </div>
+            <div class="grid gap-1 text-xs text-slate-500">
+              <div class="flex justify-between">
+                <span>発注点</span>
+                <span id="inventory-modal-reorder">0</span>
+              </div>
+              <div class="flex justify-between">
+                <span>差分</span>
+                <span id="inventory-modal-gap">0</span>
+              </div>
+              <div class="flex justify-between">
+                <span>状態</span>
+                <span id="inventory-modal-status" class="font-semibold text-slate-900">-</span>
+              </div>
+              <span id="inventory-modal-status-badge" class="inline-flex items-center justify-center rounded-full border px-3 py-1 text-[11px] font-semibold tracking-wide text-slate-900">-</span>
+            </div>
+          </div>
+          <div class="space-y-1 text-[11px] text-slate-500">
+            <p>最終取引: <span id="inventory-modal-last-activity">-</span></p>
+            <p>更新日時: <span id="inventory-modal-last-updated">-</span></p>
+            <p>仕入先: <span id="inventory-modal-supplier">-</span></p>
+          </div>
+        </div>
+        <div class="mt-4 flex justify-end gap-3">
+          <button type="button" data-modal-close class="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 transition hover:border-slate-300">キャンセル</button>
+          <button type="button" id="inventory-modal-confirm" class="rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-white transition hover:bg-primary-dark">確定</button>
+        </div>
+      </div>
+    </div>
+    <script>
+      document.addEventListener('DOMContentLoaded', function () {
+        const modal = document.getElementById('inventory-modal');
+        if (!modal) {
+          return;
+        }
+        const closeTriggers = modal.querySelectorAll('[data-modal-close]');
+        const decrementButton = document.getElementById('inventory-modal-decrement');
+        const incrementButton = document.getElementById('inventory-modal-increment');
+        const quantityDisplay = document.getElementById('inventory-modal-count');
+        const reorderDisplay = document.getElementById('inventory-modal-reorder');
+        const gapDisplay = document.getElementById('inventory-modal-gap');
+        const statusText = document.getElementById('inventory-modal-status');
+        const statusBadge = document.getElementById('inventory-modal-status-badge');
+        const shelfDisplay = document.getElementById('inventory-modal-shelf');
+        const itemCodeDisplay = document.getElementById('inventory-modal-item-code');
+        const itemNameDisplay = document.getElementById('inventory-modal-item-name');
+        const manufacturerDisplay = document.getElementById('inventory-modal-manufacturer');
+        const locationDisplay = document.getElementById('inventory-modal-location');
+        const lastActivityDisplay = document.getElementById('inventory-modal-last-activity');
+        const lastUpdatedDisplay = document.getElementById('inventory-modal-last-updated');
+        const supplierDisplay = document.getElementById('inventory-modal-supplier');
+        const confirmButton = document.getElementById('inventory-modal-confirm');
+        const formatInteger = (value) => Number(value || 0).toLocaleString('ja-JP');
+        const parseIntegerValue = (value) => Number(String(value || '').replace(/,/g, '')) || 0;
+        let activeRow = null;
+        let currentQuantity = 0;
+        const setQuantity = (value) => {
+          currentQuantity = Math.max(0, value);
+          quantityDisplay.textContent = formatInteger(currentQuantity);
+          const reorderValue = parseIntegerValue(activeRow?.dataset.itemReorder);
+          const gapValue = currentQuantity - reorderValue;
+          gapDisplay.textContent = `${gapValue >= 0 ? '+' : ''}${formatInteger(gapValue)}`;
+          reorderDisplay.textContent = formatInteger(reorderValue);
+        };
+        const openModal = (row) => {
+          activeRow = row;
+          itemNameDisplay.textContent = row.dataset.itemName || row.dataset.itemCode || '-';
+          itemCodeDisplay.textContent = row.dataset.itemCode || '-';
+          shelfDisplay.textContent = row.dataset.itemShelf || '未設定';
+          manufacturerDisplay.textContent = row.dataset.itemManufacturer || '未設定';
+          statusText.textContent = row.dataset.itemStatus || '未設定';
+          statusBadge.textContent = row.dataset.itemStatus || '未設定';
+          statusBadge.className = 'inline-flex items-center justify-center rounded-full border px-3 py-1 text-[11px] font-semibold tracking-wide ' + (row.dataset.itemStatusBadge || '');
+          lastActivityDisplay.textContent = row.dataset.itemLastActivity || '-';
+          lastUpdatedDisplay.textContent = row.dataset.itemLastUpdated || '-';
+          supplierDisplay.textContent = row.dataset.itemSupplier || '-';
+          setQuantity(parseIntegerValue(row.dataset.itemOnHand));
+          modal.classList.remove('hidden');
+        };
+        document.querySelectorAll('tbody tr[data-item-code]').forEach((row) => {
+          row.addEventListener('click', () => openModal(row));
+        });
+        const closeModal = () => {
+          modal.classList.add('hidden');
+          activeRow = null;
+        };
+        closeTriggers.forEach((trigger) => trigger.addEventListener('click', closeModal));
+        decrementButton?.addEventListener('click', (event) => {
+          event.stopPropagation();
+          setQuantity(currentQuantity - 1);
+        });
+        incrementButton?.addEventListener('click', (event) => {
+          event.stopPropagation();
+          setQuantity(currentQuantity + 1);
+        });
+        quantityDisplay?.addEventListener('click', () => {
+          setQuantity(currentQuantity + 1);
+        });
+        confirmButton?.addEventListener('click', async () => {
+          if (!activeRow) {
+            return;
+          }
+          confirmButton.disabled = true;
+          try {
+            const response = await fetch('/inventory/inline-adjust', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                item_code: activeRow.dataset.itemCode,
+                target_quantity: currentQuantity,
+              }),
+            });
+            if (!response.ok) {
+              const error = await response.json().catch(() => null);
+              throw new Error(error?.detail || '在庫の更新に失敗しました');
+            }
+            const payload = await response.json();
+            activeRow.dataset.itemOnHand = payload.on_hand;
+            activeRow.dataset.itemReorder = payload.reorder_point.toLocaleString('ja-JP');
+            activeRow.dataset.itemDifference = payload.gap_label;
+            activeRow.dataset.itemStatus = payload.status_label;
+            activeRow.dataset.itemStatusBadge = payload.status_badge;
+            activeRow.dataset.itemLastActivity = payload.last_activity;
+            activeRow.dataset.itemLastUpdated = payload.last_updated;
+            activeRow.dataset.itemSupplier = payload.supplier;
+            const cells = activeRow.querySelectorAll('td');
+            if (cells[3]) {
+              cells[3].textContent = formatInteger(payload.on_hand);
+            }
+            if (cells[4]) {
+              cells[4].textContent = formatInteger(payload.reorder_point);
+            }
+            const gapEl = activeRow.querySelector('[data-role=\"stock-gap\"]');
+            if (gapEl) {
+              gapEl.textContent = payload.gap_label;
+            }
+            const statusEl = activeRow.querySelector('[data-role=\"status-badge\"]');
+            if (statusEl) {
+              statusEl.textContent = payload.status_label;
+              statusEl.className = 'status-badge inline-flex items-center justify-center rounded-full border px-3 py-1 text-[11px] font-semibold tracking-wide ' + payload.status_badge;
+            }
+            const lastActivityElRow = activeRow.querySelector('[data-role=\"last-activity\"]');
+            const lastUpdatedElRow = activeRow.querySelector('[data-role=\"last-updated\"]');
+            const supplierElRow = activeRow.querySelector('[data-role=\"supplier\"]');
+            if (lastActivityElRow) {
+              lastActivityElRow.textContent = payload.last_activity;
+            }
+            if (lastUpdatedElRow) {
+              lastUpdatedElRow.textContent = payload.last_updated;
+            }
+            if (supplierElRow) {
+              supplierElRow.textContent = payload.supplier;
+            }
+            closeModal();
+          } catch (error) {
+            alert(error.message);
+          } finally {
+            confirmButton.disabled = false;
+          }
+        });
+      });
+    </script>
+  </div>
+</body>
+</html>

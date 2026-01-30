@@ -1,0 +1,40 @@
+departments:
+  - name: 生産部
+    usages:
+      - name: 通常工具
+        types:
+          - 前挽き
+          - 裏挽き
+          - チェーシング
+          - ミゾ
+          - 端面ミゾ
+          - 突切り
+          - ザグリ
+          - エンドミル
+          - 面取りカッター(裏バリカッター)
+          - センター
+          - ドリル
+          - フライスカッター
+          - タップ
+      - name: 専用工具
+        types: []
+      - name: 油類
+        types: []
+      - name: 出荷梱包
+        types: []
+      - name: その他
+        types: []
+      - name: 未設定
+        types: []
+
+  - name: 品質保証部
+    usages:
+      - name: 数値検査
+        types: []
+      - name: 外観検査
+        types: []
+      - name: 測定機器
+        types: []
+      - name: 未設定
+        types: []
+
