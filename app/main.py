@@ -47,6 +47,25 @@ class InlineAdjustmentPayload(BaseModel):
     target_quantity: int
 
 
+class IssueRecordRequest(BaseModel):
+    item_code: str
+    quantity: int
+    reason: Optional[str] = ""
+
+
+class IssueRecordResponse(BaseModel):
+    item_code: str
+    on_hand: int
+    reorder_point: int
+    gap_label: str
+    status_label: str
+    status_badge: str
+    status_description: str
+    last_activity: str
+    last_updated: str
+    supplier: str
+    message: str
+
 def normalize_field(value: Optional[str]) -> str:
     if value is None:
         return ""
@@ -408,6 +427,49 @@ def describe_transaction(tx: Optional[InventoryTransaction]) -> Tuple[str, datet
     return summary, occurred, supplier
 
 
+def build_inventory_status_payload(
+    item: Item,
+    inventory_item: InventoryItem,
+    last_tx: Optional[InventoryTransaction],
+) -> Dict[str, object]:
+    last_activity, last_updated, last_supplier = describe_transaction(last_tx)
+    supplier_label = (
+        item.supplier.name if item.supplier else last_supplier or normalize_field(item.manufacturer)
+    )
+    shelf_value = normalize_field(item.shelf)
+    snapshot = InventorySnapshot(
+        item_id=item.id,
+        item_code=item.item_code,
+        name=item.name,
+        item_type=display_value(item.item_type),
+        usage=display_value(item.usage),
+        department=display_value(item.department),
+        manufacturer=normalize_field(item.manufacturer),
+        shelf=shelf_value or None,
+        unit=item.unit or "",
+        on_hand=inventory_item.quantity_on_hand or 0,
+        reorder_point=item.reorder_point or 0,
+        last_activity=last_activity,
+        last_updated=last_updated,
+        location=shelf_value,
+        supplier=supplier_label or "",
+    )
+    status_label, status_badge, status_description = calculate_status(snapshot)
+    gap = snapshot.on_hand - snapshot.reorder_point
+    return {
+        "item_code": item.item_code,
+        "on_hand": snapshot.on_hand,
+        "reorder_point": snapshot.reorder_point,
+        "gap_label": '{:+,d}'.format(gap),
+        "status_label": status_label,
+        "status_badge": status_badge,
+        "status_description": status_description,
+        "last_activity": last_activity,
+        "last_updated": last_updated.strftime('%Y/%m/%d %H:%M'),
+        "supplier": supplier_label or "",
+    }
+
+
 def load_inventory_snapshots(db: Session) -> List[InventorySnapshot]:
     stmt = (
         select(Item)
@@ -474,12 +536,27 @@ def load_recent_transactions(db: Session, limit: int = 4) -> List[Dict[str, str]
                 "item": tx.item.name if tx.item else "不明品目",
                 "department": tx.item.department if tx.item and tx.item.department else "未設定部署",
                 "type": summary.split("・")[0] if summary else "",
+                "shelf": tx.item.shelf if tx.item else "",
+                "item_code": tx.item.item_code if tx.item else "",
+                "manufacturer": tx.item.manufacturer if tx.item else "",
+                "summary": summary,
                 "delta": f"{'+' if tx.delta >= 0 else ''}{tx.delta} {tx.item.unit if tx.item and tx.item.unit else ''}".strip(),
                 "date": occurred_at.strftime("%Y/%m/%d %H:%M"),
                 "note": tx.note or tx.reason or "",
             }
         )
     return recent
+
+
+@app.get("/recent-transactions")
+def recent_transactions(
+    db: Session = Depends(get_db),
+    limit: int = Query(4, ge=1, le=20),
+) -> Dict[str, List[Dict[str, str]]]:
+    transactions = load_recent_transactions(db, limit)
+    if not transactions:
+        transactions = RECENT_TRANSACTIONS
+    return {"transactions": transactions}
 
 
 def filter_inventory(
@@ -641,7 +718,7 @@ def inventory_index(
 def inventory_issue(
     item_code: str = Form(...),
     quantity: int = Form(...),
-    reason: str = Form("持出"),
+    reason: str = Form(""),
     created_by: str = Form(""),
     next_url: str = Form("/inventory"),
     db: Session = Depends(get_db),
@@ -664,8 +741,8 @@ def inventory_issue(
         item_id=item.id,
         tx_type=TransactionType.ISSUE,
         delta=-quantity,
-        reason=reason or "持出",
-        note="ユーザー持出し",
+        reason=reason or "",
+        note="",
         occurred_at=datetime.now(JST_ZONE),
         created_by=created_by or "system",
     )
@@ -677,6 +754,41 @@ def inventory_issue(
         url=f"{next_url}{separator}message={quote_plus(message)}",
         status_code=303,
     )
+
+
+@app.post('/api/inventory/issues', response_model=IssueRecordResponse)
+def api_inventory_issue(
+    payload: IssueRecordRequest,
+    db: Session = Depends(get_db),
+) -> IssueRecordResponse:
+    """シンプルな持出し記録 API（ユーザー情報なし）。"""
+    if payload.quantity <= 0:
+        raise HTTPException(status_code=400, detail="数量は 1 以上で指定してください。")
+    item = db.scalar(select(Item).filter(Item.item_code == payload.item_code))
+    if not item:
+        raise HTTPException(status_code=404, detail="該当品目が存在しません。")
+    inventory_item = db.scalar(
+        select(InventoryItem).filter(InventoryItem.item_id == item.id)
+    )
+    if not inventory_item:
+        raise HTTPException(status_code=400, detail="在庫情報が未登録です。")
+    if inventory_item.quantity_on_hand < payload.quantity:
+        raise HTTPException(status_code=400, detail="在庫数が不足しています。")
+    inventory_item.quantity_on_hand -= payload.quantity
+    tx = InventoryTransaction(
+        item_id=item.id,
+        tx_type=TransactionType.ISSUE,
+        delta=-payload.quantity,
+        reason=payload.reason or "",
+        note="",
+        occurred_at=datetime.now(JST_ZONE),
+        created_by="system",
+    )
+    db.add(tx)
+    db.commit()
+    response_data = build_inventory_status_payload(item, inventory_item, tx)
+    response_data["message"] = f"{item.name}（{item.item_code}）を{payload.quantity}件出庫しました。"
+    return IssueRecordResponse(**response_data)
 
 
 @app.post('/inventory/adjust')
@@ -754,37 +866,4 @@ def inventory_inline_adjust(
         .limit(1)
     )
     last_tx = db.scalar(last_tx_stmt)
-    last_activity, last_updated, last_supplier = describe_transaction(last_tx)
-    shelf_value = normalize_field(item.shelf)
-    supplier_label = last_supplier or (item.supplier.name if item.supplier else normalize_field(item.manufacturer))
-    snapshot = InventorySnapshot(
-        item_id=item.id,
-        item_code=item.item_code,
-        name=item.name,
-        item_type=display_value(item.item_type),
-        usage=display_value(item.usage),
-        department=display_value(item.department),
-        manufacturer=normalize_field(item.manufacturer),
-        shelf=shelf_value or None,
-        unit=item.unit or "",
-        on_hand=inventory_item.quantity_on_hand or 0,
-        reorder_point=item.reorder_point or 0,
-        last_activity=last_activity,
-        last_updated=last_updated,
-        location=shelf_value,
-        supplier=supplier_label or "",
-    )
-    status_label, status_badge, status_description = calculate_status(snapshot)
-    gap = (inventory_item.quantity_on_hand or 0) - (item.reorder_point or 0)
-    return {
-        "item_code": item.item_code,
-        "on_hand": inventory_item.quantity_on_hand or 0,
-        "reorder_point": item.reorder_point or 0,
-        "gap_label": '{:+,d}'.format(gap),
-        "status_label": status_label,
-        "status_badge": status_badge,
-        "status_description": status_description,
-        "last_activity": last_activity,
-        "last_updated": last_updated.strftime('%Y/%m/%d %H:%M'),
-        "supplier": supplier_label or "",
-    }
+    return build_inventory_status_payload(item, inventory_item, last_tx)

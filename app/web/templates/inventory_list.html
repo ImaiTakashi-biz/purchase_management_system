@@ -183,63 +183,28 @@
           </div>
         </section>
         <section class="rounded-2xl border border-slate-200 bg-white shadow-sm p-5 space-y-4">
-          <div>
-            <p class="text-xs uppercase tracking-[0.3em] text-slate-500">運用操作</p>
-            <h2 class="text-lg font-semibold text-slate-900">持出し記録</h2>
-          </div>
-          <form method="post" action="/inventory/issues" class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            <input
-              type="hidden"
-              name="next"
-              value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}"
-            />
-            <label class="flex flex-col text-sm text-slate-600">
-              <span class="text-xs text-slate-500">品目</span>
-              <select name="item_code" required class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">
-                {% for row in filtered_items %}
-                <option value="{{ row.item_code }}">{{ row.item_code }} - {{ row.name }}</option>
-                {% endfor %}
-              </select>
-            </label>
-            <label class="flex flex-col text-sm text-slate-600">
-              <span class="text-xs text-slate-500">数量</span>
-              <input name="quantity" type="number" min="1" value="1" required class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">
-            </label>
-            <label class="flex flex-col text-sm text-slate-600">
-              <span class="text-xs text-slate-500">理由</span>
-              <input name="reason" type="text" value="使用持出" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">
-            </label>
-            <label class="flex flex-col text-sm text-slate-600">
-              <span class="text-xs text-slate-500">担当者（任意）</span>
-              <input name="created_by" type="text" placeholder="山田太郎" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">
-            </label>
-            <div class="flex items-end">
-              <button type="submit" class="w-full rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-primary-dark">
-                出庫を記録する
-              </button>
-            </div>
-          </form>
-          <p class="text-[11px] text-slate-400">出庫記録は在庫数に反映され、履歴にも残ります。</p>
-        </section>
-        <section class="rounded-2xl border border-slate-200 bg-white shadow-sm p-5 space-y-4">
           <div class="flex items-center justify-between">
             <div>
               <p class="text-xs text-slate-500 uppercase tracking-[0.3em]">履歴</p>
               <h2 class="text-lg font-semibold text-slate-900">直近トランザクション</h2>
             </div>
-            <span class="text-xs text-slate-500">現場入力 / 直近{{ recent_transactions|length }}件</span>
+            <span class="text-xs text-slate-500">現場入力 / <span id="recent-transactions-count">直近{{ recent_transactions|length }}件</span></span>
           </div>
-          <div class="divide-y divide-slate-100">
+          <div id="recent-transactions-list" class="divide-y divide-slate-100">
             {% for tx in recent_transactions %}
             <div class="flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <p class="text-sm font-semibold text-slate-900">{{ tx.item }}</p>
-                <p class="text-[11px] text-slate-500">{{ tx.date }}・{{ tx.department }}</p>
+                <p class="text-[11px] text-slate-500">
+                  {{ tx.date }}・{{ tx.department }}
+                </p>
+                <p class="text-[11px] text-slate-400">
+                  棚番 {{ tx.shelf or '未設定' }} / 品番 {{ tx.item_code or '未設定' }} / メーカー {{ tx.manufacturer or '未設定' }}
+                </p>
               </div>
               <div class="flex flex-wrap items-center gap-3 text-xs text-slate-600">
-                <span class="rounded-full border border-slate-200 px-3 py-1">{{ tx.type }}</span>
+                <span class="rounded-full border border-slate-200 px-3 py-1">{{ tx.summary }}</span>
                 <span class="text-slate-900 font-bold">{{ tx.delta }}</span>
-                <span class="text-slate-500">{{ tx.note }}</span>
               </div>
             </div>
             {% endfor %}
@@ -322,15 +287,25 @@
         const itemCodeDisplay = document.getElementById('inventory-modal-item-code');
         const itemNameDisplay = document.getElementById('inventory-modal-item-name');
         const manufacturerDisplay = document.getElementById('inventory-modal-manufacturer');
-        const locationDisplay = document.getElementById('inventory-modal-location');
         const lastActivityDisplay = document.getElementById('inventory-modal-last-activity');
         const lastUpdatedDisplay = document.getElementById('inventory-modal-last-updated');
         const supplierDisplay = document.getElementById('inventory-modal-supplier');
         const confirmButton = document.getElementById('inventory-modal-confirm');
+        const recentContainer = document.getElementById('recent-transactions-list');
+        const recentCount = document.getElementById('recent-transactions-count');
         const formatInteger = (value) => Number(value || 0).toLocaleString('ja-JP');
         const parseIntegerValue = (value) => Number(String(value || '').replace(/,/g, '')) || 0;
         let activeRow = null;
         let currentQuantity = 0;
+        let initialQuantity = 0;
+        const updateModalVisuals = (payload) => {
+          statusText.textContent = payload.status_label || '未設定';
+          statusBadge.textContent = payload.status_label || '未設定';
+          statusBadge.className = 'inline-flex items-center justify-center rounded-full border px-3 py-1 text-[11px] font-semibold tracking-wide ' + (payload.status_badge || '');
+          lastActivityDisplay.textContent = payload.last_activity || '-';
+          lastUpdatedDisplay.textContent = payload.last_updated || '-';
+          supplierDisplay.textContent = payload.supplier || '-';
+        };
         const setQuantity = (value) => {
           currentQuantity = Math.max(0, value);
           quantityDisplay.textContent = formatInteger(currentQuantity);
@@ -338,6 +313,118 @@
           const gapValue = currentQuantity - reorderValue;
           gapDisplay.textContent = `${gapValue >= 0 ? '+' : ''}${formatInteger(gapValue)}`;
           reorderDisplay.textContent = formatInteger(reorderValue);
+        };
+        const applyInventoryResponse = (payload) => {
+          if (!activeRow) {
+            return;
+          }
+          activeRow.dataset.itemOnHand = payload.on_hand;
+          activeRow.dataset.itemReorder = payload.reorder_point;
+          activeRow.dataset.itemDifference = payload.gap_label;
+          activeRow.dataset.itemStatus = payload.status_label;
+          activeRow.dataset.itemStatusBadge = payload.status_badge;
+          activeRow.dataset.itemLastActivity = payload.last_activity;
+          activeRow.dataset.itemLastUpdated = payload.last_updated;
+          activeRow.dataset.itemSupplier = payload.supplier;
+          const cells = activeRow.querySelectorAll('td');
+          if (cells[3]) {
+            cells[3].textContent = formatInteger(payload.on_hand);
+          }
+          if (cells[4]) {
+            cells[4].textContent = formatInteger(payload.reorder_point);
+          }
+          const gapEl = activeRow.querySelector('[data-role="stock-gap"]');
+          if (gapEl) {
+            gapEl.textContent = payload.gap_label;
+          }
+          const statusEl = activeRow.querySelector('[data-role="status-badge"]');
+          if (statusEl) {
+            statusEl.textContent = payload.status_label;
+            statusEl.className = 'status-badge inline-flex items-center justify-center rounded-full border px-3 py-1 text-[11px] font-semibold tracking-wide ' + (payload.status_badge || '');
+          }
+          const lastActivityElRow = activeRow.querySelector('[data-role="last-activity"]');
+          const lastUpdatedElRow = activeRow.querySelector('[data-role="last-updated"]');
+          const supplierElRow = activeRow.querySelector('[data-role="supplier"]');
+          if (lastActivityElRow) {
+            lastActivityElRow.textContent = payload.last_activity;
+          }
+          if (lastUpdatedElRow) {
+            lastUpdatedElRow.textContent = payload.last_updated;
+          }
+          if (supplierElRow) {
+            supplierElRow.textContent = payload.supplier;
+          }
+          updateModalVisuals(payload);
+          setQuantity(payload.on_hand);
+        };
+        const createRecentTransactionRow = (tx) => {
+          const row = document.createElement('div');
+          row.className = 'flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:justify-between';
+          const left = document.createElement('div');
+          row.appendChild(left);
+          const title = document.createElement('p');
+          title.className = 'text-sm font-semibold text-slate-900';
+          title.textContent = tx.item || '不明品目';
+          left.appendChild(title);
+          const meta = document.createElement('p');
+          meta.className = 'text-[11px] text-slate-500';
+          meta.textContent = `${tx.date || ''}・${tx.department || ''}`;
+          left.appendChild(meta);
+          const detail = document.createElement('p');
+          detail.className = 'text-[11px] text-slate-400';
+          detail.textContent = `棚番 ${tx.shelf || '未設定'} / 品番 ${tx.item_code || '未設定'} / メーカー ${tx.manufacturer || '未設定'}`;
+          left.appendChild(detail);
+          if (tx.note && tx.note !== tx.summary) {
+            const note = document.createElement('p');
+            note.className = 'text-[11px] text-slate-400';
+            note.textContent = tx.note;
+            left.appendChild(note);
+          }
+          const right = document.createElement('div');
+          right.className = 'flex flex-wrap items-center gap-3 text-xs text-slate-600';
+          const badge = document.createElement('span');
+          badge.className = 'rounded-full border border-slate-200 px-3 py-1';
+          badge.textContent = tx.summary || '';
+          right.appendChild(badge);
+          const deltaItem = document.createElement('span');
+          deltaItem.className = 'text-slate-900 font-bold';
+          deltaItem.textContent = tx.delta || '';
+          right.appendChild(deltaItem);
+          if (tx.note && tx.note !== tx.summary) {
+            const noteBadge = document.createElement('span');
+            noteBadge.className = 'text-slate-500';
+            noteBadge.textContent = tx.note;
+            right.appendChild(noteBadge);
+          }
+          row.appendChild(right);
+          return row;
+        };
+        const renderRecentTransactions = (transactions) => {
+          if (!recentContainer) {
+            return;
+          }
+          recentContainer.innerHTML = '';
+          const fragment = document.createDocumentFragment();
+          transactions.forEach((tx) => fragment.appendChild(createRecentTransactionRow(tx)));
+          recentContainer.appendChild(fragment);
+          if (recentCount) {
+            recentCount.textContent = `直近${transactions.length}件`;
+          }
+        };
+        const refreshRecentTransactions = async () => {
+          if (!recentContainer) {
+            return;
+          }
+          try {
+            const response = await fetch('/recent-transactions');
+            if (!response.ok) {
+              return;
+            }
+            const data = await response.json();
+            renderRecentTransactions(data.transactions || []);
+          } catch (error) {
+            console.error('recent transactions refresh failed', error);
+          }
         };
         const openModal = (row) => {
           activeRow = row;
@@ -351,7 +438,9 @@
           lastActivityDisplay.textContent = row.dataset.itemLastActivity || '-';
           lastUpdatedDisplay.textContent = row.dataset.itemLastUpdated || '-';
           supplierDisplay.textContent = row.dataset.itemSupplier || '-';
-          setQuantity(parseIntegerValue(row.dataset.itemOnHand));
+          const starting = parseIntegerValue(row.dataset.itemOnHand);
+          initialQuantity = starting;
+          setQuantity(starting);
           modal.classList.remove('hidden');
         };
         document.querySelectorAll('tbody tr[data-item-code]').forEach((row) => {
@@ -379,55 +468,34 @@
           }
           confirmButton.disabled = true;
           try {
-            const response = await fetch('/inventory/inline-adjust', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                item_code: activeRow.dataset.itemCode,
-                target_quantity: currentQuantity,
-              }),
-            });
+            const delta = currentQuantity - initialQuantity;
+            let response;
+            if (delta < 0) {
+              response = await fetch('/api/inventory/issues', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  item_code: activeRow.dataset.itemCode,
+                  quantity: Math.abs(delta),
+                }),
+              });
+            } else {
+              response = await fetch('/inventory/inline-adjust', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  item_code: activeRow.dataset.itemCode,
+                  target_quantity: currentQuantity,
+                }),
+              });
+            }
             if (!response.ok) {
               const error = await response.json().catch(() => null);
               throw new Error(error?.detail || '在庫の更新に失敗しました');
             }
             const payload = await response.json();
-            activeRow.dataset.itemOnHand = payload.on_hand;
-            activeRow.dataset.itemReorder = payload.reorder_point.toLocaleString('ja-JP');
-            activeRow.dataset.itemDifference = payload.gap_label;
-            activeRow.dataset.itemStatus = payload.status_label;
-            activeRow.dataset.itemStatusBadge = payload.status_badge;
-            activeRow.dataset.itemLastActivity = payload.last_activity;
-            activeRow.dataset.itemLastUpdated = payload.last_updated;
-            activeRow.dataset.itemSupplier = payload.supplier;
-            const cells = activeRow.querySelectorAll('td');
-            if (cells[3]) {
-              cells[3].textContent = formatInteger(payload.on_hand);
-            }
-            if (cells[4]) {
-              cells[4].textContent = formatInteger(payload.reorder_point);
-            }
-            const gapEl = activeRow.querySelector('[data-role=\"stock-gap\"]');
-            if (gapEl) {
-              gapEl.textContent = payload.gap_label;
-            }
-            const statusEl = activeRow.querySelector('[data-role=\"status-badge\"]');
-            if (statusEl) {
-              statusEl.textContent = payload.status_label;
-              statusEl.className = 'status-badge inline-flex items-center justify-center rounded-full border px-3 py-1 text-[11px] font-semibold tracking-wide ' + payload.status_badge;
-            }
-            const lastActivityElRow = activeRow.querySelector('[data-role=\"last-activity\"]');
-            const lastUpdatedElRow = activeRow.querySelector('[data-role=\"last-updated\"]');
-            const supplierElRow = activeRow.querySelector('[data-role=\"supplier\"]');
-            if (lastActivityElRow) {
-              lastActivityElRow.textContent = payload.last_activity;
-            }
-            if (lastUpdatedElRow) {
-              lastUpdatedElRow.textContent = payload.last_updated;
-            }
-            if (supplierElRow) {
-              supplierElRow.textContent = payload.supplier;
-            }
+            applyInventoryResponse(payload);
+            refreshRecentTransactions();
             closeModal();
           } catch (error) {
             alert(error.message);

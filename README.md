@@ -30,3 +30,20 @@ docs/           : 要件定義・設計資料
 - `app/main.py`：在庫一覧 UI / API のエントリポイント
 - `scripts/import_items.py`：CSV から `items` / `inventory_items` / `inventory_transactions` を構築するスクリプト
 - `data/seed/仕入品マスタ.csv`：CSV 正データ。これを変更したら再度 `import_items.py` を実行してください。
+
+## API: 持出し記録
+
+- `POST /api/inventory/issues`
+  - リクエスト JSON: `{ "item_code": "...", "quantity": 2 }`
+  - レスポンス JSON:
+    - `item_code`, `on_hand`, `reorder_point`, `gap_label`, `status_label`, `status_badge`, `status_description`
+    - `last_activity`, `last_updated`, `supplier`, `message`
+  - 在庫モーダルの「確定」ボタンでは、現在の在庫数とプラス/マイナス入力で決めた値との差分を見て、数が減る場合はこの API を自動的に呼び、出庫トランザクション（Issue）を記録します。増加操作の場合は `/inventory/inline-adjust` が呼ばれます。
+  - 画面は API を意識する必要がなく、「確定」で操作が完了し、内部的に `inventory_transactions` に記録が残ります（`created_by="system"`）。
+
+## API: 直近トランザクション取得
+
+- `GET /recent-transactions`
+  - クエリパラメータ: `limit`（オプション、1〜20 件、デフォルト 4）
+  - レスポンス JSON: `{"transactions": [...]}` 形式で `item`, `department`, `summary`, `shelf`, `item_code`, `manufacturer`, `delta`, `note`, `date` を返します。
+  - モーダルの「確定」直後にフロントエンドからこのエンドポイントを呼び、画面の履歴一覧をリフレッシュする仕組みです。
