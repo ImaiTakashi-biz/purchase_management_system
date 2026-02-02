@@ -282,7 +282,7 @@ RECENT_TRANSACTIONS: List[Dict[str, str]] = [
 BASE_NAV_LINKS = [
     {'label': 'ダッシュボード', 'href': '#'},
     {'label': '在庫管理', 'href': '/inventory'},
-    {'label': '発注管理', 'href': '#'},
+    {'label': '発注管理', 'href': '/orders'},
     {'label': '納品管理', 'href': '#'},
     {'label': 'データ管理', 'href': '/manage/data'},
 ]
@@ -451,6 +451,49 @@ def describe_transaction(tx: Optional[InventoryTransaction]) -> Tuple[str, datet
     occurred = to_jst(tx.occurred_at or tx.created_at)
     supplier = tx.note or tx.reason or ""
     return summary, occurred, supplier
+
+
+def count_low_stock_by_department(suggestions: List[Dict[str, object]]) -> Dict[str, int]:
+    counter: Dict[str, int] = {}
+    for suggestion in suggestions:
+        department = normalize_field(suggestion.get('department', '')) or UNSET_LABEL
+        counter[department] = counter.get(department, 0) + 1
+    return counter
+
+
+def load_low_stock_suggestions(db: Session) -> List[Dict[str, object]]:
+    snapshots = load_inventory_snapshots(db)
+    suggestions: List[Dict[str, object]] = []
+    for snapshot in snapshots:
+        if snapshot.reorder_point <= 0:
+            continue
+        gap = snapshot.on_hand - snapshot.reorder_point
+        if gap > 0:
+            continue
+        suggestions.append(
+            {
+                'item_id': snapshot.item_id,
+                'item_code': snapshot.item_code,
+                'name': snapshot.name,
+                'department': snapshot.department or UNSET_LABEL,
+                'on_hand': snapshot.on_hand,
+                'reorder_point': snapshot.reorder_point,
+                'gap': gap,
+                'gap_label': '{:+,d}'.format(gap),
+                'supplier': snapshot.supplier or UNSET_LABEL,
+            }
+        )
+    return suggestions
+
+
+def build_orders_url(department: str = "") -> str:
+    params = []
+    final_department = normalize_field(department)
+    if final_department:
+        params.append(('department', final_department))
+    if not params:
+        return '/orders'
+    return '/orders?' + '&'.join(f'{name}={quote_plus(value)}' for name, value in params)
 
 
 def build_inventory_status_payload(
@@ -930,6 +973,48 @@ def manage_data(
         'now': datetime.now(JST_ZONE),
     }
     return templates.TemplateResponse('manage_data.html', context)
+
+
+@app.get('/orders', response_class=HTMLResponse)
+def orders_page(
+    request: Request,
+    department: str = Query('', alias='department'),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    selected_department = normalize_field(department)
+    suggestions = load_low_stock_suggestions(db)
+    sidebar_structure = build_sidebar_structure(load_inventory_snapshots(db))
+    filtered_low_stock = [
+        suggestion
+        for suggestion in suggestions
+        if not selected_department or normalize_field(suggestion.get('department', '')) == selected_department
+    ]
+    low_stock_count = len(filtered_low_stock)
+    highlight_cards = [
+        {
+            'label': '在庫不足候補',
+            'value': low_stock_count,
+            'note': '差分がゼロ以下または不足の品目',
+            'icon': 'warning',
+        },
+        {
+            'label': '部署選択中',
+            'value': selected_department or '全部署',
+            'note': 'クリックで絞り込み',
+            'icon': 'groups',
+        },
+    ]
+    context = {
+        'request': request,
+        'nav_links': build_nav_links('/orders'),
+        'sidebar_structure': sidebar_structure,
+        'low_stock_suggestions': filtered_low_stock,
+        'build_orders_url': build_orders_url,
+        'selected_department': selected_department,
+        'highlight_cards': highlight_cards,
+        'now': datetime.now(JST_ZONE),
+    }
+    return templates.TemplateResponse('orders.html', context)
 
 
 @app.post('/api/suppliers')

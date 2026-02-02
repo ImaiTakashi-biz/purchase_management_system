@@ -39,6 +39,7 @@ class Supplier(Base):
     notes = Column(Text, nullable=True)
 
     items = relationship("Item", back_populates="supplier")
+    purchase_orders = relationship("PurchaseOrder", back_populates="supplier")
 
 
 class Item(Base):
@@ -77,6 +78,7 @@ class Item(Base):
         cascade="all, delete-orphan",
     )
     supplier = relationship("Supplier", back_populates="items")
+    purchase_order_lines = relationship("PurchaseOrderLine", back_populates="item")
 
 
 class InventoryItem(Base):
@@ -105,3 +107,66 @@ class InventoryTransaction(Base):
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
 
     item = relationship("Item", back_populates="inventory_transactions")
+
+
+class PurchaseOrderStatus(str, Enum):
+    PENDING = "pending"
+    ORDERED = "ordered"
+    PARTIAL = "partial"
+    RECEIVED = "received"
+
+
+class PurchaseOrder(Base):
+    __tablename__ = "purchase_orders"
+
+    id = Column(Integer, primary_key=True, index=True)
+    order_number = Column(String(64), unique=True, nullable=False, index=True)
+    supplier_id = Column(ForeignKey("suppliers.id"), nullable=True)
+    status = Column(sqlalchemyEnum(PurchaseOrderStatus), nullable=False, default=PurchaseOrderStatus.ORDERED)
+    expected_date = Column(DateTime, nullable=True)
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(
+        DateTime,
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    supplier = relationship("Supplier", back_populates="purchase_orders")
+    lines = relationship("PurchaseOrderLine", back_populates="order", cascade="all, delete-orphan")
+    histories = relationship("PurchaseOrderHistory", back_populates="order", cascade="all, delete-orphan", order_by="PurchaseOrderHistory.occurred_at.desc()")
+
+
+class PurchaseOrderLine(Base):
+    __tablename__ = "purchase_order_lines"
+
+    id = Column(Integer, primary_key=True, index=True)
+    order_id = Column(ForeignKey("purchase_orders.id"), nullable=False)
+    item_id = Column(ForeignKey("items.id"), nullable=False)
+    quantity_ordered = Column(Integer, nullable=False)
+    quantity_received = Column(Integer, nullable=False, default=0)
+    expected_delivery_date = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(
+        DateTime,
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    order = relationship("PurchaseOrder", back_populates="lines")
+    item = relationship("Item", back_populates="purchase_order_lines")
+
+
+class PurchaseOrderHistory(Base):
+    __tablename__ = "purchase_order_histories"
+
+    id = Column(Integer, primary_key=True, index=True)
+    order_id = Column(ForeignKey("purchase_orders.id"), nullable=False)
+    status = Column(sqlalchemyEnum(PurchaseOrderStatus), nullable=False)
+    note = Column(Text, nullable=True)
+    occurred_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_by = Column(String(128), nullable=True)
+
+    order = relationship("PurchaseOrder", back_populates="histories")
