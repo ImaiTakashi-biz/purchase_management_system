@@ -63,9 +63,8 @@
       <div class="flex-1 overflow-y-auto px-5 py-6 space-y-4">
         {% for section in sidebar_structure %}
         <div class="space-y-2">
-          <div class="flex items-center justify-between">
+          <div>
             <p class="text-sm font-semibold text-slate-900">{{ section.name if section.name else '未設定' }}</p>
-            <span class="text-[11px] text-slate-400">{{ section.categories|length }}カテゴリ</span>
           </div>
           <button
             class="w-full rounded-2xl border px-3 py-2 text-left text-sm font-semibold {% if selected_department == section.name %}border-primary bg-primary/10 text-primary{% else %}border-slate-200 bg-slate-50 text-slate-600{% endif %}"

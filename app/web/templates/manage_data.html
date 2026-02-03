@@ -123,7 +123,7 @@
         </form>
         <div id="supplier-list" class="space-y-2">
           {% for supplier in suppliers %}
-          <div class="px-4 py-3 rounded-2xl border border-slate-100 bg-slate-50 cursor-pointer supplier-row"
+          <div class="px-4 py-3 rounded-2xl border border-slate-100 bg-slate-50 cursor-pointer supplier-row transition hover:bg-slate-100"
                data-id="{{ supplier.id }}"
                data-name="{{ supplier.name }}"
                data-contact="{{ supplier.contact_person or '' }}"
@@ -196,6 +196,13 @@
               <span class="text-xs text-slate-500">棚番</span>
               <input id="item-shelf" name="shelf" type="text" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm" />
             </label>
+            <label class="flex flex-col gap-1 text-sm text-slate-600">
+              <span class="text-xs text-slate-500">管理／管理外</span>
+              <select id="item-management-type" name="management_type" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm">
+                <option value="管理">管理</option>
+                <option value="管理外">管理外</option>
+              </select>
+            </label>
           </div>
           <div class="grid gap-2 md:grid-cols-2 items-end">
             <label class="flex flex-col gap-1 text-sm text-slate-600">
@@ -256,6 +263,7 @@
       const itemManufacturerInput = document.getElementById('item-manufacturer');
       const itemShelfInput = document.getElementById('item-shelf');
       const itemReorderInput = document.getElementById('item-reorder');
+      const itemManagementTypeSelect = document.getElementById('item-management-type');
       const itemSupplierSelect = document.getElementById('item-supplier');
       const itemReset = document.getElementById('item-form-reset');
       const itemList = document.getElementById('item-list');
@@ -267,6 +275,7 @@
         ? JSON.parse(initialItemsElement.textContent || '[]')
         : [];
 
+      let supplierEditPrevious = null; // 編集時の変更内容表示用（クリック時の値）
       const resetSupplierForm = () => {
         supplierIdInput.value = '';
         supplierNameInput.value = '';
@@ -278,6 +287,7 @@
         supplierAssistantNameInput.value = '';
         supplierAssistantEmailInput.value = '';
         supplierNotesInput.value = '';
+        supplierEditPrevious = null;
       };
       const resetItemForm = () => {
         itemIdInput.value = '';
@@ -288,7 +298,9 @@
         itemManufacturerInput.value = '';
         itemShelfInput.value = '';
         itemReorderInput.value = '0';
+        if (itemManagementTypeSelect) itemManagementTypeSelect.value = '管理';
         itemSupplierSelect.value = '';
+        itemEditPreviousReorder = null;
       };
 
       const bindSupplierRows = () => {
@@ -304,7 +316,18 @@
             supplierAssistantNameInput.value = row.dataset.assistantName || '';
             supplierAssistantEmailInput.value = row.dataset.assistantEmail || '';
             supplierNotesInput.value = row.dataset.notes || '';
-            supplierForm?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            supplierEditPrevious = {
+              name: (row.dataset.name || '').trim(),
+              contact_person: (row.dataset.contact || '').trim(),
+              mobile_number: (row.dataset.mobile || '').trim(),
+              phone_number: (row.dataset.phone || '').trim(),
+              email: (row.dataset.email || '').trim(),
+              fax_number: (row.dataset.fax || '').trim(),
+              assistant_name: (row.dataset.assistantName || '').trim(),
+              assistant_email: (row.dataset.assistantEmail || '').trim(),
+              notes: (row.dataset.notes || '').trim(),
+            };
+            window.scrollTo({ top: 0, behavior: 'smooth' });
           });
         });
       };
@@ -319,7 +342,7 @@
 
       const createItemRow = (item) => {
         const row = document.createElement('div');
-        row.className = 'px-4 py-3 rounded-2xl border border-slate-100 bg-slate-50 cursor-pointer item-row';
+        row.className = 'px-4 py-3 rounded-2xl border border-slate-100 bg-slate-50 cursor-pointer item-row transition hover:bg-slate-100';
         row.dataset.id = item.id;
         row.dataset.code = item.item_code;
         row.dataset.name = item.name;
@@ -330,6 +353,7 @@
         row.dataset.shelf = item.shelf || '';
         row.dataset.unit = item.unit || '';
         row.dataset.reorder = item.reorder_point ?? 0;
+        row.dataset.managementType = item.management_type || '管理';
         row.dataset.supplier = item.supplier_id || '';
         row.dataset.supplierName = item.supplier_name || '';
         row.innerHTML = `
@@ -348,6 +372,7 @@
       };
 
       let currentItemRows = [];
+      let itemEditPreviousReorder = null; // 編集時の完了メッセージ用（変更前の発注点）
       const bindItemRowListeners = () => {
         currentItemRows = Array.from(document.querySelectorAll('.item-row'));
         currentItemRows.forEach((row) => {
@@ -360,8 +385,10 @@
             itemManufacturerInput.value = row.dataset.manufacturer || '';
             itemShelfInput.value = row.dataset.shelf || '';
             itemReorderInput.value = row.dataset.reorder || '0';
+            if (itemManagementTypeSelect) itemManagementTypeSelect.value = (row.dataset.managementType || '管理') === '管理外' ? '管理外' : '管理';
             itemSupplierSelect.value = row.dataset.supplier || '';
-            itemForm?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            itemEditPreviousReorder = row.dataset.reorder ?? '0';
+            window.scrollTo({ top: 0, behavior: 'smooth' });
           });
         });
       };
@@ -391,7 +418,12 @@
             return;
           }
           const data = await response.json();
-          renderItemList(data.items || []);
+          const items = data.items || [];
+          renderItemList(items);
+          const firstCard = itemList.querySelector('.item-row');
+          if (firstCard && items.length > 0) {
+            firstCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }
         } catch (error) {
           console.error('検索に失敗しました', error);
         }
@@ -433,6 +465,30 @@
             const error = await response.json().catch(() => null);
             throw new Error(error?.detail || '仕入先の保存に失敗しました。');
           }
+          let msg = id ? `仕入先名「${payload.name}」編集完了` : `仕入先名「${payload.name}」追加完了`;
+          if (id && supplierEditPrevious) {
+            const labels = {
+              name: '仕入先名',
+              contact_person: '担当者',
+              mobile_number: '携帯',
+              phone_number: '電話',
+              email: 'メール',
+              fax_number: 'FAX',
+              assistant_name: '担当連絡',
+              assistant_email: '担当メール',
+              notes: '備考',
+            };
+            const changed = [];
+            Object.keys(labels).forEach((key) => {
+              const prev = (supplierEditPrevious[key] || '').trim();
+              const next = (payload[key] || '').trim();
+              if (prev !== next) changed.push(labels[key]);
+            });
+            if (changed.length > 0) {
+              msg += `（${changed.join('、')}を変更）`;
+            }
+          }
+          alert(msg);
           resetSupplierForm();
           location.reload();
         } catch (error) {
@@ -444,16 +500,18 @@
         event.preventDefault();
         const payload = {
           item_code: itemCodeInput.value.trim(),
+          name: itemCodeInput.value.trim() || itemTypeInput.value.trim() || '',
           item_type: itemTypeInput.value.trim(),
           usage: itemUsageInput.value.trim(),
           department: itemDepartmentInput.value.trim(),
           manufacturer: itemManufacturerInput.value.trim(),
           shelf: itemShelfInput.value.trim(),
           reorder_point: Number(itemReorderInput.value) || 0,
+          management_type: (itemManagementTypeSelect && itemManagementTypeSelect.value) || '管理',
           supplier_id: itemSupplierSelect.value ? Number(itemSupplierSelect.value) : null,
         };
-        if (!payload.item_code || !payload.name) {
-          alert('品番と品名は必須です。');
+        if (!payload.item_code) {
+          alert('品番は必須です。');
           return;
         }
         const id = itemIdInput.value.trim();
@@ -469,6 +527,13 @@
             const error = await response.json().catch(() => null);
             throw new Error(error?.detail || '仕入品の保存に失敗しました。');
           }
+          const code = payload.item_code;
+          const oldR = itemEditPreviousReorder != null ? String(itemEditPreviousReorder) : null;
+          const newR = String(payload.reorder_point);
+          const msg = id
+            ? (oldR != null && (oldR !== newR) ? `品番${code} 発注点${oldR}→${newR}へ変更完了` : `品番${code} 編集完了`)
+            : `品番${code} 追加完了`;
+          alert(msg);
           resetItemForm();
           location.reload();
         } catch (error) {

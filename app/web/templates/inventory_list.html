@@ -194,34 +194,6 @@
             </table>
           </div>
         </section>
-        <section class="rounded-2xl border border-slate-200 bg-white shadow-sm p-5 space-y-4">
-          <div class="flex items-center justify-between">
-            <div>
-              <p class="text-xs text-slate-500 uppercase tracking-[0.3em]">履歴</p>
-              <h2 class="text-lg font-semibold text-slate-900">直近トランザクション</h2>
-            </div>
-            <span class="text-xs text-slate-500">現場入力 / <span id="recent-transactions-count">直近{{ recent_transactions|length }}件</span></span>
-          </div>
-          <div id="recent-transactions-list" class="divide-y divide-slate-100">
-            {% for tx in recent_transactions %}
-            <div class="flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <p class="text-sm font-semibold text-slate-900">{{ tx.item }}</p>
-                <p class="text-[11px] text-slate-500">
-                  {{ tx.date }}・{{ tx.department }}
-                </p>
-                <p class="text-[11px] text-slate-400">
-                  棚番 {{ tx.shelf or '未設定' }} / 品番 {{ tx.item_code or '未設定' }} / メーカー {{ tx.manufacturer or '未設定' }}
-                </p>
-              </div>
-              <div class="flex flex-wrap items-center gap-3 text-xs text-slate-600">
-                <span class="rounded-full border border-slate-200 px-3 py-1">{{ tx.summary }}</span>
-                <span class="text-slate-900 font-bold">{{ tx.delta }}</span>
-              </div>
-            </div>
-            {% endfor %}
-          </div>
-        </section>
       </div>
     </main>
     <div id="inventory-modal" class="fixed inset-0 hidden z-50 items-center justify-center px-4 py-6">
@@ -330,6 +302,9 @@
           if (!activeRow) {
             return;
           }
+          const onHand = Number(payload.on_hand) || 0;
+          const reorder = Number(payload.reorder_point) || 0;
+          const gap = onHand - reorder;
           activeRow.dataset.itemOnHand = payload.on_hand;
           activeRow.dataset.itemReorder = payload.reorder_point;
           activeRow.dataset.itemDifference = payload.gap_label;
@@ -338,6 +313,10 @@
           activeRow.dataset.itemLastActivity = payload.last_activity;
           activeRow.dataset.itemLastUpdated = payload.last_updated;
           activeRow.dataset.itemSupplier = payload.supplier;
+          activeRow.classList.remove('bg-red-50');
+          if (gap <= 0) {
+            activeRow.classList.add('bg-red-50');
+          }
           const cells = activeRow.querySelectorAll('td');
           if (cells[3]) {
             cells[3].textContent = formatInteger(payload.on_hand);
@@ -348,6 +327,12 @@
           const gapEl = activeRow.querySelector('[data-role="stock-gap"]');
           if (gapEl) {
             gapEl.textContent = payload.gap_label;
+            gapEl.className = 'text-xs font-semibold ' + (gap > 0 ? 'text-emerald-600' : 'text-red-600');
+          }
+          const gapIconSpan = gapEl?.previousElementSibling;
+          if (gapIconSpan && gapIconSpan.classList.contains('material-symbols-outlined')) {
+            gapIconSpan.textContent = gap > 0 ? 'arrow_upward' : 'warning';
+            gapIconSpan.className = 'material-symbols-outlined text-xs ' + (gap > 0 ? 'text-emerald-600' : 'text-red-600');
           }
           const statusEl = activeRow.querySelector('[data-role="status-badge"]');
           if (statusEl) {

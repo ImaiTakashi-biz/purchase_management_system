@@ -111,6 +111,8 @@ def import_items(session: Session) -> None:
         manufacturer = read_column(row, "メーカー名")
         shelf_value = read_column(row, "棚番") or None
         reorder_point = safe_int(read_column(row, "発注点"))
+        management_type_raw = read_column(row, "管理/管理外")
+        management_type = management_type_raw if management_type_raw in ("管理", "管理外") else "管理"
         stock_qty = safe_int(read_column(row, "在庫数"))
         supplier_name = read_column(row, "仕入先名")
         supplier = None
@@ -127,6 +129,7 @@ def import_items(session: Session) -> None:
             item.manufacturer = manufacturer
             item.shelf = shelf_value
             item.reorder_point = reorder_point
+            item.management_type = management_type
             item.supplier = supplier
         else:
             name = item_type or manufacturer or item_code
@@ -140,6 +143,7 @@ def import_items(session: Session) -> None:
                 shelf=shelf_value,
                 unit="個",
                 reorder_point=reorder_point,
+                management_type=management_type,
                 supplier=supplier,
             )
             session.add(item)

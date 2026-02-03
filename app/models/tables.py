@@ -56,6 +56,8 @@ class Item(Base):
     unit = Column(String(32), nullable=True)
     reorder_point = Column(Integer, default=0, nullable=False)
     supplier_id = Column(ForeignKey("suppliers.id"), nullable=True)
+    # 管理＝発注点で在庫管理 / 管理外＝発注点なしで任意発注（在庫一覧には管理のみ表示）
+    management_type = Column(String(32), nullable=True)
     is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(

@@ -55,7 +55,7 @@ class SupplierPayload(BaseModel):
 
 class ItemPayload(BaseModel):
     item_code: str
-    name: str
+    name: Optional[str] = ""  # 未入力時はAPI側で品番・種類で補完
     item_type: Optional[str] = ""
     usage: Optional[str] = ""
     department: Optional[str] = ""
@@ -63,6 +63,7 @@ class ItemPayload(BaseModel):
     shelf: Optional[str] = ""
     unit: Optional[str] = ""
     reorder_point: int = 0
+    management_type: Optional[str] = ""  # 管理 / 管理外
     supplier_id: Optional[int] = None
 
 class IssueRecordRequest(BaseModel):
@@ -285,6 +286,7 @@ BASE_NAV_LINKS = [
     {'label': '発注管理', 'href': '/orders'},
     {'label': '納品管理', 'href': '#'},
     {'label': 'データ管理', 'href': '/manage/data'},
+    {'label': '履歴', 'href': '/history'},
 ]
 
 
@@ -540,8 +542,10 @@ def build_inventory_status_payload(
 
 
 def load_inventory_snapshots(db: Session) -> List[InventorySnapshot]:
+    # 在庫一覧には「管理」のみ表示（管理外は発注点なし・任意発注のため別扱い）
     stmt = (
         select(Item)
+        .where(or_(Item.management_type == "管理", Item.management_type.is_(None)))
         .options(selectinload(Item.inventory_item))
         .options(selectinload(Item.inventory_transactions))
         .options(selectinload(Item.supplier))
@@ -729,9 +733,6 @@ def inventory_index(
     total_items = len(snapshots)
     attention_count = sum(1 for snapshot in snapshots if calculate_status(snapshot)[0] != '十分')
     low_stock_count = sum(1 for snapshot in snapshots if snapshot.on_hand <= snapshot.reorder_point)
-    recent_transactions = load_recent_transactions(db)
-    if not recent_transactions:
-        recent_transactions = RECENT_TRANSACTIONS
 
     kpi_cards = [
         {
@@ -775,7 +776,6 @@ def inventory_index(
         'filtered_count': len(rows),
         'total_items': total_items,
         'kpi_cards': kpi_cards,
-        'recent_transactions': recent_transactions,
         'now': datetime.now(JST_ZONE),
         'build_inventory_url': build_inventory_url,
         'alert_message': alert_message,
@@ -1017,6 +1017,23 @@ def orders_page(
     return templates.TemplateResponse('orders.html', context)
 
 
+@app.get('/history', response_class=HTMLResponse)
+def history_page(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    transactions = load_recent_transactions(db, limit=50)
+    if not transactions:
+        transactions = RECENT_TRANSACTIONS
+    context = {
+        'request': request,
+        'nav_links': build_nav_links('/history'),
+        'recent_transactions': transactions,
+        'now': datetime.now(JST_ZONE),
+    }
+    return templates.TemplateResponse('history.html', context)
+
+
 @app.post('/api/suppliers')
 def create_supplier(
     payload: SupplierPayload,
@@ -1070,20 +1087,35 @@ def _resolve_supplier(db: Session, supplier_id: Optional[int]) -> Optional[Suppl
     return db.scalar(select(Supplier).filter(Supplier.id == supplier_id))
 
 
+def _effective_item_name(payload: ItemPayload) -> str:
+    """品名が空の場合は品番・種類の順で補完（DBのNOT NULL対応）"""
+    name = (payload.name or "").strip()
+    if name:
+        return name
+    if payload.item_code.strip():
+        return payload.item_code.strip()
+    if (payload.item_type or "").strip():
+        return payload.item_type.strip()
+    return "品名未設定"
+
+
 @app.post('/api/items')
 def create_item(
     payload: ItemPayload,
     db: Session = Depends(get_db),
 ) -> Dict[str, object]:
-    if not payload.item_code.strip() or not payload.name.strip():
-        raise HTTPException(status_code=400, detail="品番と品名は必須です。")
+    if not payload.item_code.strip():
+        raise HTTPException(status_code=400, detail="品番は必須です。")
     existing = db.scalar(select(Item).filter(Item.item_code == payload.item_code.strip()))
     if existing:
         raise HTTPException(status_code=400, detail="同一品番が存在します。")
     supplier = _resolve_supplier(db, payload.supplier_id)
+    name = _effective_item_name(payload)
+    mgmt = (payload.management_type or "").strip()
+    management_type = mgmt if mgmt in ("管理", "管理外") else "管理"
     item = Item(
         item_code=payload.item_code.strip(),
-        name=payload.name.strip(),
+        name=name,
         item_type=payload.item_type.strip() or None,
         usage=payload.usage.strip() or None,
         department=payload.department.strip() or None,
@@ -1091,6 +1123,7 @@ def create_item(
         shelf=payload.shelf.strip() or None,
         unit=payload.unit.strip() or None,
         reorder_point=max(0, payload.reorder_point),
+        management_type=management_type,
         supplier_id=supplier.id if supplier else None,
     )
     db.add(item)
@@ -1111,15 +1144,15 @@ def update_item(
     item = db.scalar(select(Item).filter(Item.id == item_id))
     if not item:
         raise HTTPException(status_code=404, detail="仕入品が見つかりません。")
-    if not payload.item_code.strip() or not payload.name.strip():
-        raise HTTPException(status_code=400, detail="品番と品名は必須です。")
+    if not payload.item_code.strip():
+        raise HTTPException(status_code=400, detail="品番は必須です。")
     if payload.item_code.strip() != item.item_code:
         duplicate = db.scalar(select(Item).filter(Item.item_code == payload.item_code.strip(), Item.id != item_id))
         if duplicate:
             raise HTTPException(status_code=400, detail="同一品番が存在します。")
         item.item_code = payload.item_code.strip()
     supplier = _resolve_supplier(db, payload.supplier_id)
-    item.name = payload.name.strip()
+    item.name = _effective_item_name(payload)
     item.item_type = payload.item_type.strip() or None
     item.usage = payload.usage.strip() or None
     item.department = payload.department.strip() or None
@@ -1127,6 +1160,8 @@ def update_item(
     item.shelf = payload.shelf.strip() or None
     item.unit = payload.unit.strip() or None
     item.reorder_point = max(0, payload.reorder_point)
+    mgmt = (payload.management_type or "").strip()
+    item.management_type = mgmt if mgmt in ("管理", "管理外") else (item.management_type or "管理")
     item.supplier_id = supplier.id if supplier else None
     db.commit()
     return {'id': item.id, 'item_code': item.item_code}
@@ -1158,6 +1193,7 @@ def search_items(
             "shelf": item.shelf or "",
             "unit": item.unit or "",
             "reorder_point": item.reorder_point or 0,
+            "management_type": item.management_type or "",
             "supplier_id": item.supplier_id,
             "supplier_name": item.supplier.name if item.supplier else "",
         }
