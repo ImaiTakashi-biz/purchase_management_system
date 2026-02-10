@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ダッシュボード - 購入品一元管理</title>
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet" />
+  <script src="https://cdn.tailwindcss.com?plugins=forms,typography"></script>
+  <script id="tailwind-config">
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            primary: "#1152d4",
+            "primary-dark": "#0e3c9a",
+          },
+          fontFamily: {
+            display: ["Noto Sans JP", "Inter", "sans-serif"],
+          },
+        },
+      },
+    };
+  </script>
+  <style>
+    body {
+      font-family: "Noto Sans JP", "Inter", sans-serif;
+    }
+    .material-symbols-outlined {
+      font-variation-settings: "FILL" 0, "wght" 400, "GRAD" 0, "opsz" 24;
+    }
+  </style>
+</head>
+<body class="min-h-screen bg-slate-100 text-slate-900">
+  <header class="sticky top-0 z-30 border-b border-slate-200 bg-white shadow-sm">
+    <div class="mx-auto flex max-w-screen-xl flex-col gap-3 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
+      <div>
+        <p class="text-xs uppercase tracking-[0.3em] text-slate-500">社内向け購買管理</p>
+        <p class="text-2xl font-bold text-slate-900">ダッシュボード</p>
+      </div>
+      <div class="flex items-center gap-4 text-xs text-slate-500 sm:gap-6">
+        <span class="material-symbols-outlined text-base">monitoring</span>
+        <span>更新: {{ now.strftime('%Y/%m/%d %H:%M') }}</span>
+      </div>
+    </div>
+    <div class="border-t border-slate-100">
+      <div class="mx-auto flex max-w-screen-xl flex-wrap items-center gap-4 px-4 py-2 text-xs uppercase tracking-[0.3em]">
+        {% for link in nav_links %}
+        <a href="{{ link.href }}" class="py-2 {% if link.active %}border-b-2 border-primary text-primary{% else %}text-slate-500 hover:text-slate-900{% endif %}">
+          {{ link.label }}
+        </a>
+        {% endfor %}
+      </div>
+    </div>
+  </header>
+
+  <main class="mx-auto max-w-screen-xl space-y-6 px-4 py-6">
+    <section class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      {% for card in kpi_cards %}
+      <article class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div class="flex items-center justify-between text-xs uppercase tracking-[0.3em] text-slate-500">
+          <span>{{ card.label }}</span>
+          <span class="material-symbols-outlined text-lg text-slate-400">{{ card.icon }}</span>
+        </div>
+        <p class="mt-3 text-3xl font-bold text-slate-900">{{ card.value }}</p>
+        <p class="text-xs text-slate-500">{{ card.note }}</p>
+      </article>
+      {% endfor %}
+    </section>
+
+    <section class="grid gap-4 lg:grid-cols-[1.7fr_1fr]">
+      <article class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div class="flex items-center justify-between">
+          <div>
+            <p class="text-xs uppercase tracking-[0.3em] text-slate-500">Order Assist</p>
+            <h2 class="text-lg font-semibold text-slate-900">要発注品目</h2>
+          </div>
+          <a href="/orders" class="rounded-xl border border-primary px-3 py-1 text-xs font-semibold text-primary hover:bg-primary/10">発注管理を開く</a>
+        </div>
+        <div class="mt-4 overflow-x-auto rounded-xl border border-slate-200">
+          <table class="min-w-full text-sm">
+            <thead class="bg-slate-50 text-xs uppercase text-slate-500">
+              <tr>
+                <th class="px-3 py-2 text-left">品番</th>
+                <th class="px-3 py-2 text-left">品名</th>
+                <th class="px-3 py-2 text-left">部署</th>
+                <th class="px-3 py-2 text-right">在庫/発注点</th>
+                <th class="px-3 py-2 text-right">差分</th>
+                <th class="px-3 py-2 text-left">仕入先</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+              {% for item in low_stock_items %}
+              <tr>
+                <td class="px-3 py-2 font-semibold">{{ item.item_code }}</td>
+                <td class="px-3 py-2">{{ item.name }}</td>
+                <td class="px-3 py-2">
+                  <a href="{{ build_orders_url(item.department) }}" class="text-primary hover:underline">{{ item.department }}</a>
+                </td>
+                <td class="px-3 py-2 text-right">{{ item.on_hand }} / {{ item.reorder_point }}</td>
+                <td class="px-3 py-2 text-right font-semibold text-rose-700">{{ item.gap_label }}</td>
+                <td class="px-3 py-2">{{ item.supplier }}</td>
+              </tr>
+              {% else %}
+              <tr>
+                <td colspan="6" class="px-3 py-6 text-center text-sm text-slate-500">要発注品目はありません。</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </article>
+
+      <article class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div class="flex items-center justify-between">
+          <div>
+            <p class="text-xs uppercase tracking-[0.3em] text-slate-500">Order Status</p>
+            <h2 class="text-lg font-semibold text-slate-900">発注ステータス</h2>
+          </div>
+          <span class="text-xs text-slate-500">合計 {{ order_total_count }} 件</span>
+        </div>
+        <div class="mt-4 space-y-2">
+          {% for row in order_status_cards %}
+          <div class="flex items-center justify-between rounded-xl border px-3 py-2
+            {% if row.status == 'DRAFT' %}border-slate-200 bg-slate-50{% endif %}
+            {% if row.status == 'CONFIRMED' %}border-indigo-200 bg-indigo-50{% endif %}
+            {% if row.status == 'SENT' %}border-blue-200 bg-blue-50{% endif %}
+            {% if row.status == 'WAITING' %}border-amber-200 bg-amber-50{% endif %}
+            {% if row.status == 'RECEIVED' %}border-emerald-200 bg-emerald-50{% endif %}
+          ">
+            <span class="text-sm font-semibold text-slate-800">{{ row.label }}</span>
+            <span class="rounded-full bg-white px-2 py-0.5 text-sm font-bold text-slate-900">{{ row.count }}</span>
+          </div>
+          {% endfor %}
+        </div>
+        <div class="mt-4 grid gap-2">
+          <a href="/orders" class="rounded-xl bg-primary px-3 py-2 text-center text-sm font-semibold text-white hover:bg-primary-dark">発注管理へ</a>
+          <a href="/logistics" class="rounded-xl border border-slate-300 px-3 py-2 text-center text-sm font-semibold text-slate-700 hover:bg-slate-50">入出荷管理へ</a>
+        </div>
+      </article>
+    </section>
+
+    <section class="grid gap-4 lg:grid-cols-2">
+      <article class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div class="flex items-center justify-between">
+          <div>
+            <p class="text-xs uppercase tracking-[0.3em] text-slate-500">Inbound Queue</p>
+            <h2 class="text-lg font-semibold text-slate-900">入庫待ち発注</h2>
+          </div>
+          <span class="text-xs text-slate-500">{{ pending_order_total }} 件</span>
+        </div>
+        <div class="mt-4 overflow-x-auto rounded-xl border border-slate-200">
+          <table class="min-w-full text-sm">
+            <thead class="bg-slate-50 text-xs uppercase text-slate-500">
+              <tr>
+                <th class="px-3 py-2 text-left">PO</th>
+                <th class="px-3 py-2 text-left">仕入先</th>
+                <th class="px-3 py-2 text-left">状態</th>
+                <th class="px-3 py-2 text-right">残数</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+              {% for order in pending_orders %}
+              <tr>
+                <td class="px-3 py-2 font-semibold">PO #{{ order.id }}</td>
+                <td class="px-3 py-2">{{ order.supplier_name }}</td>
+                <td class="px-3 py-2">
+                  <span class="inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold {% if order.status == 'WAITING' %}border-amber-200 bg-amber-50 text-amber-700{% else %}border-blue-200 bg-blue-50 text-blue-700{% endif %}">
+                    {{ order.status }}
+                  </span>
+                </td>
+                <td class="px-3 py-2 text-right font-semibold">{{ order.remaining_quantity_total }}</td>
+              </tr>
+              {% else %}
+              <tr>
+                <td colspan="4" class="px-3 py-6 text-center text-sm text-slate-500">入庫待ちの発注はありません。</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </article>
+
+      <article class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div class="flex items-center justify-between">
+          <div>
+            <p class="text-xs uppercase tracking-[0.3em] text-slate-500">Today</p>
+            <h2 class="text-lg font-semibold text-slate-900">本日の入出庫件数</h2>
+          </div>
+          <a href="/history" class="text-xs font-semibold text-primary hover:underline">履歴を開く</a>
+        </div>
+        <div class="mt-4 grid grid-cols-3 gap-2">
+          <div class="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-3 text-center">
+            <p class="text-[11px] text-emerald-700">入庫</p>
+            <p class="text-2xl font-bold text-emerald-800">{{ today_counts.receipt_count }}</p>
+          </div>
+          <div class="rounded-xl border border-rose-200 bg-rose-50 px-3 py-3 text-center">
+            <p class="text-[11px] text-rose-700">出庫</p>
+            <p class="text-2xl font-bold text-rose-800">{{ today_counts.issue_count }}</p>
+          </div>
+          <div class="rounded-xl border border-amber-200 bg-amber-50 px-3 py-3 text-center">
+            <p class="text-[11px] text-amber-700">調整</p>
+            <p class="text-2xl font-bold text-amber-800">{{ today_counts.adjust_count }}</p>
+          </div>
+        </div>
+        <div class="mt-4 space-y-2">
+          {% for dept, count in low_stock_by_department %}
+          <div class="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm">
+            <span class="text-slate-700">{{ dept }}</span>
+            <span class="rounded-full border border-slate-300 bg-white px-2 py-0.5 text-xs font-semibold text-slate-700">要発注 {{ count }}</span>
+          </div>
+          {% else %}
+          <p class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-500">要発注の部署情報はありません。</p>
+          {% endfor %}
+        </div>
+      </article>
+    </section>
+
+    <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div class="flex items-center justify-between">
+        <div>
+          <p class="text-xs uppercase tracking-[0.3em] text-slate-500">Recent Activity</p>
+          <h2 class="text-lg font-semibold text-slate-900">直近トランザクション</h2>
+        </div>
+        <a href="/history" class="text-xs font-semibold text-primary hover:underline">すべて表示</a>
+      </div>
+      <div class="mt-4 divide-y divide-slate-100">
+        {% for tx in recent_transactions %}
+        <div class="flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p class="text-sm font-semibold text-slate-900">{{ tx.item }}</p>
+            <p class="text-[11px] text-slate-500">{{ tx.date }}・{{ tx.department }}</p>
+            <p class="text-[11px] text-slate-400">棚番 {{ tx.shelf or '未設定' }} / 品番 {{ tx.item_code or '未設定' }} / メーカー {{ tx.manufacturer or '未設定' }}</p>
+          </div>
+          <div class="flex flex-wrap items-center gap-3 text-xs text-slate-600">
+            <span class="rounded-full border border-slate-200 px-3 py-1">{{ tx.summary }}</span>
+            <span class="font-bold text-slate-900">{{ tx.delta }}</span>
+          </div>
+        </div>
+        {% else %}
+        <p class="py-6 text-sm text-slate-500">トランザクション履歴はありません。</p>
+        {% endfor %}
+      </div>
+    </section>
+  </main>
+</body>
+</html>

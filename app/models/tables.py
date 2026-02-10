@@ -1,15 +1,16 @@
-from datetime import datetime
+﻿from datetime import datetime
 from enum import Enum
 
 from sqlalchemy import (
     Boolean,
     Column,
+    Date,
     DateTime,
-    Enum as sqlalchemyEnum,
     ForeignKey,
     Integer,
     String,
     Text,
+    Enum as sqlalchemyEnum,
     func,
     UniqueConstraint,
 )
@@ -24,6 +25,12 @@ class TransactionType(str, Enum):
     ADJUST = "adjust"
 
 
+class UserRole(str, Enum):
+    ADMIN = "admin"
+    MANAGER = "manager"
+    VIEWER = "viewer"
+
+
 class Supplier(Base):
     __tablename__ = "suppliers"
 
@@ -33,6 +40,7 @@ class Supplier(Base):
     mobile_number = Column(String(64), nullable=True)
     phone_number = Column(String(64), nullable=True)
     email = Column(String(256), nullable=True)
+    email_cc = Column(String(256), nullable=True)
     assistant_name = Column(String(128), nullable=True)
     assistant_email = Column(String(256), nullable=True)
     fax_number = Column(String(64), nullable=True)
@@ -56,7 +64,6 @@ class Item(Base):
     unit = Column(String(32), nullable=True)
     reorder_point = Column(Integer, default=0, nullable=False)
     supplier_id = Column(ForeignKey("suppliers.id"), nullable=True)
-    # 管理＝発注点で在庫管理 / 管理外＝発注点なしで任意発注（在庫一覧には管理のみ表示）
     management_type = Column(String(32), nullable=True)
     is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
@@ -112,21 +119,23 @@ class InventoryTransaction(Base):
 
 
 class PurchaseOrderStatus(str, Enum):
-    PENDING = "pending"
-    ORDERED = "ordered"
-    PARTIAL = "partial"
-    RECEIVED = "received"
+    DRAFT = "DRAFT"
+    CONFIRMED = "CONFIRMED"
+    SENT = "SENT"
+    WAITING = "WAITING"
+    RECEIVED = "RECEIVED"
+    CANCELLED = "CANCELLED"
 
 
 class PurchaseOrder(Base):
     __tablename__ = "purchase_orders"
 
     id = Column(Integer, primary_key=True, index=True)
-    order_number = Column(String(64), unique=True, nullable=False, index=True)
-    supplier_id = Column(ForeignKey("suppliers.id"), nullable=True)
-    status = Column(sqlalchemyEnum(PurchaseOrderStatus), nullable=False, default=PurchaseOrderStatus.ORDERED)
-    expected_date = Column(DateTime, nullable=True)
-    notes = Column(Text, nullable=True)
+    supplier_id = Column(ForeignKey("suppliers.id"), nullable=False)
+    department = Column(String(128), nullable=True)
+    ordered_by_user = Column(String(128), nullable=True)
+    status = Column(String(32), nullable=False, default=PurchaseOrderStatus.DRAFT.value)
+    issued_date = Column(Date, nullable=True)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(
         DateTime,
@@ -137,18 +146,22 @@ class PurchaseOrder(Base):
 
     supplier = relationship("Supplier", back_populates="purchase_orders")
     lines = relationship("PurchaseOrderLine", back_populates="order", cascade="all, delete-orphan")
-    histories = relationship("PurchaseOrderHistory", back_populates="order", cascade="all, delete-orphan", order_by="PurchaseOrderHistory.occurred_at.desc()")
+    document = relationship("PurchaseOrderDocument", back_populates="order", uselist=False, cascade="all, delete-orphan")
+    email_logs = relationship("EmailSendLog", back_populates="order", cascade="all, delete-orphan", order_by="EmailSendLog.sent_at.desc()")
 
 
 class PurchaseOrderLine(Base):
     __tablename__ = "purchase_order_lines"
 
     id = Column(Integer, primary_key=True, index=True)
-    order_id = Column(ForeignKey("purchase_orders.id"), nullable=False)
-    item_id = Column(ForeignKey("items.id"), nullable=False)
-    quantity_ordered = Column(Integer, nullable=False)
-    quantity_received = Column(Integer, nullable=False, default=0)
-    expected_delivery_date = Column(DateTime, nullable=True)
+    purchase_order_id = Column(ForeignKey("purchase_orders.id"), nullable=False)
+    item_id = Column(ForeignKey("items.id"), nullable=True)
+    item_name_free = Column(String(256), nullable=True)
+    maker = Column(String(256), nullable=True)
+    quantity = Column(Integer, nullable=False)
+    received_quantity = Column(Integer, nullable=False, default=0)
+    vendor_reply_due_date = Column(Date, nullable=True)
+    note = Column(Text, nullable=True)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(
         DateTime,
@@ -161,14 +174,49 @@ class PurchaseOrderLine(Base):
     item = relationship("Item", back_populates="purchase_order_lines")
 
 
-class PurchaseOrderHistory(Base):
-    __tablename__ = "purchase_order_histories"
+class PurchaseOrderDocument(Base):
+    __tablename__ = "purchase_order_documents"
 
     id = Column(Integer, primary_key=True, index=True)
-    order_id = Column(ForeignKey("purchase_orders.id"), nullable=False)
-    status = Column(sqlalchemyEnum(PurchaseOrderStatus), nullable=False)
-    note = Column(Text, nullable=True)
-    occurred_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    created_by = Column(String(128), nullable=True)
+    purchase_order_id = Column(ForeignKey("purchase_orders.id"), nullable=False, unique=True)
+    pdf_path = Column(String(1024), nullable=False)
+    generated_at = Column(DateTime, server_default=func.now(), nullable=False)
+    generated_by = Column(String(128), nullable=True)
 
-    order = relationship("PurchaseOrder", back_populates="histories")
+    order = relationship("PurchaseOrder", back_populates="document")
+
+
+class EmailSendLog(Base):
+    __tablename__ = "email_send_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    purchase_order_id = Column(ForeignKey("purchase_orders.id"), nullable=False)
+    sent_by = Column(String(128), nullable=True)
+    sent_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    to_recipients = Column("to", Text, nullable=True)
+    cc_recipients = Column("cc", Text, nullable=True)
+    subject = Column(String(256), nullable=False)
+    body = Column(Text, nullable=False)
+    attachment_path = Column(String(1024), nullable=True)
+    success = Column(Boolean, nullable=False, default=False)
+    error_message = Column(Text, nullable=True)
+
+    order = relationship("PurchaseOrder", back_populates="email_logs")
+
+
+class AppUser(Base):
+    __tablename__ = "app_users"
+
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String(64), unique=True, nullable=False, index=True)
+    display_name = Column(String(128), nullable=False)
+    password_hash = Column(String(512), nullable=False)
+    role = Column(sqlalchemyEnum(UserRole), nullable=False, default=UserRole.VIEWER)
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(
+        DateTime,
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )

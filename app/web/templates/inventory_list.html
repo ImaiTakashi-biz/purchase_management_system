@@ -115,11 +115,6 @@
             </label>
             <button type="submit" class="rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-white transition hover:bg-primary-dark">絞り込み</button>
           </form>
-          {% if alert_message %}
-          <div class="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-700">
-            {{ alert_message }}
-          </div>
-          {% endif %}
           {% if selected_department %}
           <div class="flex flex-wrap gap-2 text-xs">
             <a href="{{ build_inventory_url(keyword, selected_category, selected_usage, department=selected_department, category_override='') }}" class="rounded-full border px-3 py-1 {% if not selected_category %}border-primary bg-primary/10 text-primary{% else %}border-slate-200 bg-slate-50 text-slate-600{% endif %}">すべて</a>
@@ -253,6 +248,21 @@
         </div>
       </div>
     </div>
+    <div id="global-loading" class="hidden fixed inset-0 z-[70] items-center justify-center bg-slate-900/40">
+      <div class="rounded-2xl bg-white px-6 py-5 shadow-2xl border border-slate-200 min-w-[260px]">
+        <div class="flex items-center gap-3">
+          <div class="h-6 w-6 rounded-full border-2 border-slate-200 border-t-primary animate-spin"></div>
+          <div>
+            <p class="text-sm font-semibold text-slate-800">処理中</p>
+            <p id="global-loading-message" class="text-xs text-slate-500">しばらくお待ちください...</p>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div id="toast-container" class="pointer-events-none fixed right-4 top-4 z-[80] flex w-[340px] max-w-[calc(100vw-2rem)] flex-col gap-2"></div>
+    <script id="inventory-context" type="application/json">
+      {{ {'alert_message': alert_message} | tojson | safe }}
+    </script>
     <script>
       document.addEventListener('DOMContentLoaded', function () {
         const modal = document.getElementById('inventory-modal');
@@ -277,8 +287,54 @@
         const confirmButton = document.getElementById('inventory-modal-confirm');
         const recentContainer = document.getElementById('recent-transactions-list');
         const recentCount = document.getElementById('recent-transactions-count');
+        const loadingOverlay = document.getElementById('global-loading');
+        const loadingMessage = document.getElementById('global-loading-message');
+        const toastContainer = document.getElementById('toast-container');
+        const contextEl = document.getElementById('inventory-context');
+        const context = contextEl ? JSON.parse(contextEl.textContent || '{}') : {};
+        const MIN_LOADING_VISIBLE_MS = 450;
+        let loadingStartedAt = 0;
         const formatInteger = (value) => Number(value || 0).toLocaleString('ja-JP');
         const parseIntegerValue = (value) => Number(String(value || '').replace(/,/g, '')) || 0;
+        const setLoading = (isLoading, message = 'しばらくお待ちください...') => {
+          if (!loadingOverlay || !loadingMessage) {
+            return;
+          }
+          if (isLoading) {
+            loadingStartedAt = Date.now();
+            loadingMessage.textContent = message;
+            loadingOverlay.classList.remove('hidden');
+            loadingOverlay.classList.add('flex');
+            return;
+          }
+          const elapsed = Date.now() - loadingStartedAt;
+          const waitMs = Math.max(0, MIN_LOADING_VISIBLE_MS - elapsed);
+          setTimeout(() => {
+            loadingOverlay.classList.add('hidden');
+            loadingOverlay.classList.remove('flex');
+          }, waitMs);
+        };
+        const showToast = (message, kind = 'info') => {
+          if (!toastContainer) {
+            return;
+          }
+          const toneClass = {
+            success: 'border-emerald-200 bg-emerald-50 text-emerald-800',
+            error: 'border-rose-200 bg-rose-50 text-rose-800',
+            info: 'border-slate-200 bg-white text-slate-800',
+          };
+          const toast = document.createElement('div');
+          toast.className = `pointer-events-auto rounded-xl border px-3 py-2 shadow-sm transition-opacity ${toneClass[kind] || toneClass.info}`;
+          toast.innerHTML = `<p class="text-sm font-semibold">${message}</p>`;
+          toastContainer.appendChild(toast);
+          setTimeout(() => {
+            toast.classList.add('opacity-0');
+            setTimeout(() => toast.remove(), 200);
+          }, 2800);
+        };
+        if (context.alert_message) {
+          showToast(String(context.alert_message), 'success');
+        }
         let activeRow = null;
         let currentQuantity = 0;
         let initialQuantity = 0;
@@ -465,6 +521,7 @@
           }
           confirmButton.disabled = true;
           try {
+            setLoading(true, '在庫を更新しています...');
             const delta = currentQuantity - initialQuantity;
             let response;
             if (delta < 0) {
@@ -493,10 +550,12 @@
             const payload = await response.json();
             applyInventoryResponse(payload);
             refreshRecentTransactions();
+            showToast(payload.message || '在庫を更新しました。', 'success');
             closeModal();
           } catch (error) {
-            alert(error.message);
+            showToast(error.message || String(error), 'error');
           } finally {
+            setLoading(false);
             confirmButton.disabled = false;
           }
         });

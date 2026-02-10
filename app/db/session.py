@@ -1,7 +1,8 @@
-from pathlib import Path
+﻿from pathlib import Path
 from typing import Generator
 
 from sqlalchemy import create_engine, text
+from sqlalchemy.engine import Connection
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.base import Base
@@ -29,12 +30,88 @@ def get_db() -> Generator[Session, None, None]:
         db.close()
 
 
+def _table_exists(conn: Connection, table_name: str) -> bool:
+    row = conn.execute(
+        text("SELECT name FROM sqlite_master WHERE type='table' AND name = :name"),
+        {"name": table_name},
+    ).fetchone()
+    return row is not None
+
+
+def _table_columns(conn: Connection, table_name: str) -> list[str]:
+    if not _table_exists(conn, table_name):
+        return []
+    rows = conn.execute(text(f"PRAGMA table_info({table_name})")).fetchall()
+    return [row[1] for row in rows]
+
+
+def _ensure_column(conn: Connection, table_name: str, column_name: str, ddl: str) -> None:
+    columns = _table_columns(conn, table_name)
+    if column_name in columns:
+        return
+    conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {ddl}"))
+
+
+def _migrate_legacy_purchase_order_tables(conn: Connection) -> None:
+    legacy_tables = conn.execute(
+        text(
+            "SELECT name FROM sqlite_master "
+            "WHERE type='table' AND ("
+            "name LIKE 'purchase_orders_legacy_%' OR "
+            "name LIKE 'purchase_order_lines_legacy_%' OR "
+            "name LIKE 'purchase_order_histories_legacy_%'"
+            ")"
+        )
+    ).fetchall()
+    for row in legacy_tables:
+        conn.execute(text(f"DROP TABLE IF EXISTS {row[0]}"))
+
+    if not _table_exists(conn, "purchase_orders"):
+        return
+
+    columns = set(_table_columns(conn, "purchase_orders"))
+    required_columns = {"supplier_id", "department", "ordered_by_user", "status", "issued_date"}
+    legacy_markers = {"order_number", "expected_date"}
+    is_legacy = bool(columns & legacy_markers) or not required_columns.issubset(columns)
+
+    if not is_legacy:
+        return
+
+    for table_name in ("purchase_order_lines", "purchase_order_histories", "purchase_orders"):
+        if _table_exists(conn, table_name):
+            conn.execute(text(f"DROP TABLE IF EXISTS {table_name}"))
+
+
 def init_db() -> None:
-    Base.metadata.create_all(bind=engine)
-    # 既存DBに management_type カラムがなければ追加（仕入品マスタ「管理/管理外」用）
     with engine.connect() as conn:
-        result = conn.execute(text("PRAGMA table_info(items)"))
-        columns = [row[1] for row in result]
-        if "management_type" not in columns:
-            conn.execute(text("ALTER TABLE items ADD COLUMN management_type VARCHAR(32)"))
-            conn.commit()
+        _migrate_legacy_purchase_order_tables(conn)
+        conn.commit()
+
+    Base.metadata.create_all(bind=engine)
+
+    with engine.connect() as conn:
+        _ensure_column(conn, "items", "management_type", "VARCHAR(32)")
+        _ensure_column(conn, "suppliers", "mobile_number", "VARCHAR(64)")
+        _ensure_column(conn, "suppliers", "phone_number", "VARCHAR(64)")
+        _ensure_column(conn, "suppliers", "email_cc", "VARCHAR(256)")
+        _ensure_column(conn, "suppliers", "assistant_name", "VARCHAR(128)")
+        _ensure_column(conn, "suppliers", "assistant_email", "VARCHAR(256)")
+        _ensure_column(conn, "suppliers", "fax_number", "VARCHAR(64)")
+        _ensure_column(conn, "suppliers", "notes", "TEXT")
+        _ensure_column(conn, "purchase_order_lines", "received_quantity", "INTEGER NOT NULL DEFAULT 0")
+        conn.execute(
+            text(
+                "UPDATE suppliers "
+                "SET assistant_email = email_cc "
+                "WHERE (assistant_email IS NULL OR TRIM(assistant_email) = '') "
+                "AND (email_cc IS NOT NULL AND TRIM(email_cc) <> '')"
+            )
+        )
+        conn.execute(
+            text(
+                "UPDATE purchase_order_lines "
+                "SET received_quantity = 0 "
+                "WHERE received_quantity IS NULL"
+            )
+        )
+        conn.commit()

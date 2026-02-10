@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>データ管理 | メール設定</title>
+  <script src="https://cdn.tailwindcss.com?plugins=forms"></script>
+  <style>
+    body { font-family: "Noto Sans JP", "Yu Gothic", sans-serif; }
+  </style>
+</head>
+<body class="bg-slate-100 text-slate-900 min-h-screen">
+  <header class="sticky top-0 z-30 bg-white border-b border-slate-200 shadow-sm">
+    <div class="max-w-screen-xl mx-auto px-4 py-4 flex items-center justify-between">
+      <div>
+        <p class="text-xs text-slate-500 uppercase tracking-[0.3em]">購入品一元管理</p>
+        <p class="text-2xl font-bold">データ管理</p>
+      </div>
+      <p class="text-xs text-slate-500">更新: {{ now.strftime('%Y/%m/%d %H:%M') }}</p>
+    </div>
+    <div class="border-t border-slate-100">
+      <div class="max-w-screen-xl mx-auto flex flex-wrap items-center gap-4 px-4 py-2 text-xs uppercase tracking-[0.3em]">
+        {% for link in nav_links %}
+        <a href="{{ link.href }}" class="py-2 {% if link.active %}text-blue-700 border-b-2 border-blue-700{% else %}text-slate-500 hover:text-slate-900{% endif %}">
+          {{ link.label }}
+        </a>
+        {% endfor %}
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-screen-xl mx-auto px-4 py-6 space-y-4">
+    <section class="rounded-2xl border border-slate-200 bg-white p-3">
+      <div class="flex flex-wrap gap-2">
+        {% for section in manage_sections %}
+        <a href="{{ section.href }}" class="rounded-xl px-4 py-2 text-sm font-semibold {% if section.active %}bg-blue-600 text-white{% else %}border border-slate-300 text-slate-700 hover:bg-slate-50{% endif %}">
+          {{ section.label }}
+        </a>
+        {% endfor %}
+      </div>
+    </section>
+
+    <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm space-y-4">
+      <div>
+        <p class="text-xs uppercase tracking-[0.3em] text-slate-500">Mail Settings</p>
+        <h2 class="text-lg font-semibold">SMTP・送信アカウント（管理者）</h2>
+      </div>
+
+      <div class="grid gap-3 md:grid-cols-2">
+        <label class="flex flex-col gap-1 text-sm">
+          <span class="text-xs text-slate-500">SMTPサーバー</span>
+          <input id="mail-settings-smtp-server" type="text" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2" />
+        </label>
+        <label class="flex flex-col gap-1 text-sm">
+          <span class="text-xs text-slate-500">SMTPポート</span>
+          <input id="mail-settings-smtp-port" type="number" min="1" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2" />
+        </label>
+      </div>
+
+      <div class="flex items-center justify-between">
+        <h3 class="text-sm font-semibold text-slate-700">送信アカウント</h3>
+        <button type="button" id="add-mail-account" class="rounded-xl border border-slate-300 px-3 py-1 text-xs text-slate-700 hover:bg-slate-50">追加</button>
+      </div>
+      <div class="overflow-x-auto rounded-xl border border-slate-200">
+        <table class="min-w-full text-sm">
+          <thead class="bg-slate-50 text-xs text-slate-500 uppercase">
+            <tr>
+              <th class="px-3 py-2 text-left">キー</th>
+              <th class="px-3 py-2 text-left">表示名</th>
+              <th class="px-3 py-2 text-left">送信元メール</th>
+              <th class="px-3 py-2 text-left">部署</th>
+              <th class="px-3 py-2 text-left">パスワード</th>
+              <th class="px-3 py-2 text-left">操作</th>
+            </tr>
+          </thead>
+          <tbody id="mail-accounts-body" class="divide-y divide-slate-100"></tbody>
+        </table>
+      </div>
+
+      <div class="flex items-center justify-between">
+        <h3 class="text-sm font-semibold text-slate-700">部署デフォルト</h3>
+        <button type="button" id="add-department-default" class="rounded-xl border border-slate-300 px-3 py-1 text-xs text-slate-700 hover:bg-slate-50">追加</button>
+      </div>
+      <div class="overflow-x-auto rounded-xl border border-slate-200">
+        <table class="min-w-full text-sm">
+          <thead class="bg-slate-50 text-xs text-slate-500 uppercase">
+            <tr>
+              <th class="px-3 py-2 text-left">部署</th>
+              <th class="px-3 py-2 text-left">デフォルトアカウント</th>
+              <th class="px-3 py-2 text-left">操作</th>
+            </tr>
+          </thead>
+          <tbody id="department-defaults-body" class="divide-y divide-slate-100"></tbody>
+        </table>
+      </div>
+
+      <div class="flex justify-end">
+        <button type="button" id="save-mail-settings" class="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700">メール設定を保存</button>
+      </div>
+      <p class="text-xs text-slate-500">パスワードはJSONには保存されず、keyringに保存されます。</p>
+    </section>
+  </main>
+  <div id="global-loading" class="hidden fixed inset-0 z-[70] items-center justify-center bg-slate-900/40">
+    <div class="rounded-2xl bg-white px-6 py-5 shadow-2xl border border-slate-200 min-w-[260px]">
+      <div class="flex items-center gap-3">
+        <div class="h-6 w-6 rounded-full border-2 border-slate-200 border-t-blue-600 animate-spin"></div>
+        <div>
+          <p class="text-sm font-semibold text-slate-800">処理中</p>
+          <p id="global-loading-message" class="text-xs text-slate-500">しばらくお待ちください...</p>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div id="toast-container" class="pointer-events-none fixed right-4 top-4 z-[80] flex w-[340px] max-w-[calc(100vw-2rem)] flex-col gap-2"></div>
+
+  <script>
+    document.addEventListener('DOMContentLoaded', function () {
+      const smtpServerInput = document.getElementById('mail-settings-smtp-server');
+      const smtpPortInput = document.getElementById('mail-settings-smtp-port');
+      const mailAccountsBody = document.getElementById('mail-accounts-body');
+      const departmentDefaultsBody = document.getElementById('department-defaults-body');
+      const addMailAccountButton = document.getElementById('add-mail-account');
+      const addDepartmentDefaultButton = document.getElementById('add-department-default');
+      const saveMailSettingsButton = document.getElementById('save-mail-settings');
+      const loadingOverlay = document.getElementById('global-loading');
+      const loadingMessage = document.getElementById('global-loading-message');
+      const toastContainer = document.getElementById('toast-container');
+      const MIN_LOADING_VISIBLE_MS = 450;
+      let loadingStartedAt = 0;
+
+      const setLoading = (isLoading, message = 'しばらくお待ちください...') => {
+        if (!loadingOverlay || !loadingMessage) return;
+        if (isLoading) {
+          loadingStartedAt = Date.now();
+          loadingMessage.textContent = message;
+          loadingOverlay.classList.remove('hidden');
+          loadingOverlay.classList.add('flex');
+          return;
+        }
+        const elapsed = Date.now() - loadingStartedAt;
+        const waitMs = Math.max(0, MIN_LOADING_VISIBLE_MS - elapsed);
+        setTimeout(() => {
+          loadingOverlay.classList.add('hidden');
+          loadingOverlay.classList.remove('flex');
+        }, waitMs);
+      };
+
+      const showToast = (message, kind = 'info') => {
+        if (!toastContainer) return;
+        const toneClass = {
+          success: 'border-emerald-200 bg-emerald-50 text-emerald-800',
+          error: 'border-rose-200 bg-rose-50 text-rose-800',
+          warning: 'border-amber-200 bg-amber-50 text-amber-800',
+          info: 'border-slate-200 bg-white text-slate-800',
+        };
+        const toast = document.createElement('div');
+        toast.className = `pointer-events-auto rounded-xl border px-3 py-2 shadow-sm transition-opacity ${toneClass[kind] || toneClass.info}`;
+        toast.innerHTML = `<p class="text-sm font-semibold">${message}</p>`;
+        toastContainer.appendChild(toast);
+        setTimeout(() => {
+          toast.classList.add('opacity-0');
+          setTimeout(() => toast.remove(), 200);
+        }, 2800);
+      };
+
+      let mailSettingsState = {
+        smtp_server: '',
+        smtp_port: 587,
+        accounts: {},
+        department_defaults: {},
+        password_registered: {},
+        keyring_available: true,
+      };
+
+      const normalizeAccountKey = (value) => String(value || '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+
+      const accountOptionsHtml = (selectedValue = '') => {
+        const keys = Object.keys(mailSettingsState.accounts || {}).sort();
+        const options = ['<option value="">選択してください</option>'];
+        keys.forEach((key) => {
+          const account = mailSettingsState.accounts[key] || {};
+          const selected = key === selectedValue ? ' selected' : '';
+          options.push(`<option value="${key}"${selected}>${key} (${account.display_name || '-'})</option>`);
+        });
+        return options.join('');
+      };
+
+      const renderMailAccounts = () => {
+        const accounts = mailSettingsState.accounts || {};
+        const passwordRegistered = mailSettingsState.password_registered || {};
+        const rows = Object.keys(accounts).sort().map((key) => {
+          const account = accounts[key] || {};
+          const passwordStatus = passwordRegistered[key]
+            ? '<span class="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] text-emerald-700">登録済</span>'
+            : '<span class="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] text-slate-500">未登録</span>';
+          return `
+            <tr>
+              <td class="px-3 py-2"><input type="text" class="mail-account-key w-full rounded border border-slate-300 px-2 py-1 text-xs" value="${key}" /></td>
+              <td class="px-3 py-2"><input type="text" class="mail-account-display w-full rounded border border-slate-300 px-2 py-1 text-xs" value="${account.display_name || ''}" /></td>
+              <td class="px-3 py-2"><input type="email" class="mail-account-sender w-full rounded border border-slate-300 px-2 py-1 text-xs" value="${account.sender || ''}" /></td>
+              <td class="px-3 py-2"><input type="text" class="mail-account-department w-full rounded border border-slate-300 px-2 py-1 text-xs" value="${account.department || ''}" /></td>
+              <td class="px-3 py-2">
+                <div class="flex items-center gap-2">
+                  <input type="password" class="mail-account-password w-full rounded border border-slate-300 px-2 py-1 text-xs" placeholder="パスワード" />
+                  <button type="button" class="mail-account-save-password rounded border border-slate-300 px-2 py-1 text-xs">設定</button>
+                  ${passwordStatus}
+                </div>
+              </td>
+              <td class="px-3 py-2"><button type="button" class="mail-account-remove rounded border border-rose-200 px-2 py-1 text-xs text-rose-700">削除</button></td>
+            </tr>
+          `;
+        });
+        mailAccountsBody.innerHTML = rows.join('');
+      };
+
+      const renderDepartmentDefaults = () => {
+        const defaults = mailSettingsState.department_defaults || {};
+        const rows = Object.keys(defaults).sort().map((department) => `
+          <tr>
+            <td class="px-3 py-2"><input type="text" class="mail-default-department w-full rounded border border-slate-300 px-2 py-1 text-xs" value="${department}" /></td>
+            <td class="px-3 py-2">
+              <select class="mail-default-account w-full rounded border border-slate-300 px-2 py-1 text-xs">
+                ${accountOptionsHtml(defaults[department] || '')}
+              </select>
+            </td>
+            <td class="px-3 py-2"><button type="button" class="mail-default-remove rounded border border-rose-200 px-2 py-1 text-xs text-rose-700">削除</button></td>
+          </tr>
+        `);
+        departmentDefaultsBody.innerHTML = rows.join('');
+      };
+
+      const renderMailSettings = () => {
+        smtpServerInput.value = mailSettingsState.smtp_server || '';
+        smtpPortInput.value = String(mailSettingsState.smtp_port || 587);
+        renderMailAccounts();
+        renderDepartmentDefaults();
+      };
+
+      const loadMailSettings = async () => {
+        try {
+          setLoading(true, 'メール設定を読み込んでいます...');
+          const response = await fetch('/api/email-settings');
+          const payload = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(payload.detail || 'メール設定の読み込みに失敗しました。');
+          mailSettingsState = {
+            smtp_server: payload.smtp_server || '',
+            smtp_port: Number(payload.smtp_port || 587),
+            accounts: payload.accounts || {},
+            department_defaults: payload.department_defaults || {},
+            password_registered: payload.password_registered || {},
+            keyring_available: payload.keyring_available !== false,
+          };
+          renderMailSettings();
+        } catch (error) {
+          showToast(error.message || String(error), 'error');
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      const collectMailSettingsPayload = () => {
+        const accounts = {};
+        const defaults = {};
+
+        Array.from(document.querySelectorAll('#mail-accounts-body tr')).forEach((row) => {
+          const rawKey = row.querySelector('.mail-account-key')?.value || '';
+          const key = normalizeAccountKey(rawKey);
+          const displayName = (row.querySelector('.mail-account-display')?.value || '').trim();
+          const sender = (row.querySelector('.mail-account-sender')?.value || '').trim();
+          const department = (row.querySelector('.mail-account-department')?.value || '').trim();
+          if (!key && !displayName && !sender && !department) return;
+          if (!key) throw new Error('アカウントキーを入力してください。');
+          if (accounts[key]) throw new Error(`アカウントキーが重複しています: ${key}`);
+          if (!displayName || !sender) throw new Error(`アカウント ${key} の表示名と送信元メールは必須です。`);
+          accounts[key] = { display_name: displayName, sender, department };
+        });
+
+        Array.from(document.querySelectorAll('#department-defaults-body tr')).forEach((row) => {
+          const department = (row.querySelector('.mail-default-department')?.value || '').trim();
+          const accountKey = (row.querySelector('.mail-default-account')?.value || '').trim();
+          if (!department && !accountKey) return;
+          if (!department || !accountKey) throw new Error('部署デフォルトは部署とアカウントを両方指定してください。');
+          if (!accounts[accountKey]) throw new Error(`部署デフォルトのアカウントが存在しません: ${accountKey}`);
+          const accountDepartment = String(accounts[accountKey].department || '').trim();
+          if (accountDepartment && accountDepartment !== department) {
+            throw new Error(`部署デフォルト不整合: ${department} の既定アカウント ${accountKey} の部署は ${accountDepartment} です。`);
+          }
+          defaults[department] = accountKey;
+        });
+
+        return {
+          smtp_server: (smtpServerInput.value || '').trim(),
+          smtp_port: Number(smtpPortInput.value || 0),
+          accounts,
+          department_defaults: defaults,
+        };
+      };
+
+      const syncMailStateFromInputs = () => {
+        mailSettingsState = {
+          ...mailSettingsState,
+          ...collectMailSettingsPayload(),
+        };
+      };
+
+      addMailAccountButton?.addEventListener('click', () => {
+        try {
+          syncMailStateFromInputs();
+          let index = 1;
+          let key = `new_account_${index}`;
+          while (mailSettingsState.accounts[key]) {
+            index += 1;
+            key = `new_account_${index}`;
+          }
+          mailSettingsState.accounts[key] = { display_name: '', sender: '', department: '' };
+          renderMailSettings();
+        } catch (error) {
+          showToast(error.message || String(error), 'error');
+        }
+      });
+
+      addDepartmentDefaultButton?.addEventListener('click', () => {
+        try {
+          syncMailStateFromInputs();
+          let index = 1;
+          let department = `新規部署${index}`;
+          while (mailSettingsState.department_defaults[department]) {
+            index += 1;
+            department = `新規部署${index}`;
+          }
+          mailSettingsState.department_defaults[department] = '';
+          renderDepartmentDefaults();
+        } catch (error) {
+          showToast(error.message || String(error), 'error');
+        }
+      });
+
+      mailAccountsBody?.addEventListener('click', async (event) => {
+        const removeButton = event.target.closest('.mail-account-remove');
+        if (removeButton) {
+          try {
+            syncMailStateFromInputs();
+            const row = removeButton.closest('tr');
+            const key = normalizeAccountKey(row?.querySelector('.mail-account-key')?.value || '');
+            if (key) {
+              delete mailSettingsState.accounts[key];
+              delete mailSettingsState.password_registered[key];
+              Object.keys(mailSettingsState.department_defaults).forEach((department) => {
+                if (mailSettingsState.department_defaults[department] === key) {
+                  delete mailSettingsState.department_defaults[department];
+                }
+              });
+            }
+            renderMailSettings();
+          } catch (error) {
+            showToast(error.message || String(error), 'error');
+          }
+          return;
+        }
+
+        const savePasswordButton = event.target.closest('.mail-account-save-password');
+        if (!savePasswordButton) return;
+        if (!mailSettingsState.keyring_available) {
+          showToast('keyring が利用できないため、パスワードを保存できません。', 'error');
+          return;
+        }
+
+        const row = savePasswordButton.closest('tr');
+        const key = normalizeAccountKey(row?.querySelector('.mail-account-key')?.value || '');
+        const passwordInput = row?.querySelector('.mail-account-password');
+        const password = (passwordInput?.value || '').trim();
+        if (!key) {
+          showToast('アカウントキーが不正です。', 'error');
+          return;
+        }
+        if (!password) {
+          showToast('パスワードを入力してください。', 'error');
+          return;
+        }
+
+        try {
+          setLoading(true, 'パスワードを保存しています...');
+          const response = await fetch(`/api/email-settings/accounts/${encodeURIComponent(key)}/password`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ password }),
+          });
+          const result = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(result.detail || 'パスワード保存に失敗しました。');
+          if (passwordInput) passwordInput.value = '';
+          mailSettingsState.password_registered[key] = true;
+          renderMailAccounts();
+          renderDepartmentDefaults();
+          showToast('パスワードを保存しました。', 'success');
+        } catch (error) {
+          showToast(error.message || String(error), 'error');
+        } finally {
+          setLoading(false);
+        }
+      });
+
+      departmentDefaultsBody?.addEventListener('click', (event) => {
+        const removeButton = event.target.closest('.mail-default-remove');
+        if (!removeButton) return;
+        try {
+          syncMailStateFromInputs();
+          const row = removeButton.closest('tr');
+          const department = (row?.querySelector('.mail-default-department')?.value || '').trim();
+          if (department) delete mailSettingsState.department_defaults[department];
+          renderDepartmentDefaults();
+        } catch (error) {
+          showToast(error.message || String(error), 'error');
+        }
+      });
+
+      saveMailSettingsButton?.addEventListener('click', async () => {
+        try {
+          setLoading(true, 'メール設定を保存しています...');
+          const payload = collectMailSettingsPayload();
+          const response = await fetch('/api/email-settings', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          const result = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(result.detail || 'メール設定の保存に失敗しました。');
+          mailSettingsState = { ...mailSettingsState, ...payload };
+          await loadMailSettings();
+          showToast('メール設定を保存しました。', 'success');
+        } catch (error) {
+          showToast(error.message || String(error), 'error');
+        } finally {
+          setLoading(false);
+        }
+      });
+
+      loadMailSettings();
+    });
+  </script>
+</body>
+</html>

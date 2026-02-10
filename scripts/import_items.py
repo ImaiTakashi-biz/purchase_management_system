@@ -79,6 +79,11 @@ def import_suppliers(session: Session) -> None:
         if not name:
             continue
         supplier = session.scalar(select(Supplier).filter(Supplier.name == name))
+        assistant_email = (
+            read_column(row, "アシスタントメール")
+            or read_column(row, "担当メール")
+            or read_column(row, "メールCC")
+        )
         data = {
             "name": name,
             "contact_person": read_column(row, "営業担当者名"),
@@ -86,7 +91,7 @@ def import_suppliers(session: Session) -> None:
             "phone_number": read_column(row, "会社電話番号"),
             "email": read_column(row, "メール"),
             "assistant_name": read_column(row, "アシスタント名"),
-            "assistant_email": read_column(row, "メールCC"),
+            "assistant_email": assistant_email,
             "fax_number": read_column(row, "FAX番号"),
             "notes": read_column(row, "備考"),
         }

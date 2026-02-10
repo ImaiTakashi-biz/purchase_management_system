@@ -1,0 +1,234 @@
+﻿<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <style>
+    @page {
+      size: A4;
+      margin: 14mm 14mm 16mm 14mm;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+      color: #111827;
+      font-family: "Meiryo", "Yu Gothic", sans-serif;
+      font-size: 11px;
+      line-height: 1.45;
+      background: #ffffff;
+    }
+    .sheet {
+      width: 100%;
+    }
+    .topline {
+      height: 5px;
+      border-radius: 9999px;
+      background: linear-gradient(90deg, #0f4ccf 0%, #3a7bfd 60%, #8bb6ff 100%);
+      margin-bottom: 5mm;
+    }
+    .head-row {
+      display: table;
+      width: 100%;
+      margin-bottom: 5mm;
+    }
+    .head-left,
+    .head-right {
+      display: table-cell;
+      vertical-align: top;
+    }
+    .head-left {
+      width: 70%;
+    }
+    .head-right {
+      width: 30%;
+      text-align: right;
+      font-size: 11px;
+      color: #334155;
+    }
+    .title {
+      margin: 0;
+      font-size: 25px;
+      font-weight: 700;
+      letter-spacing: 0.22em;
+      color: #0f172a;
+    }
+    .sub-title {
+      margin-top: 1.5mm;
+      font-size: 11px;
+      color: #64748b;
+    }
+    .party-row {
+      display: table;
+      width: 100%;
+      margin-bottom: 4.5mm;
+    }
+    .party-left,
+    .party-right {
+      display: table-cell;
+      vertical-align: top;
+    }
+    .party-left {
+      width: 52%;
+      padding-right: 6mm;
+    }
+    .party-right {
+      width: 48%;
+    }
+    .card {
+      border: 1px solid #d6deeb;
+      border-radius: 12px;
+      padding: 3.5mm 4mm;
+      background: #f8fbff;
+    }
+    .to-name {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 700;
+      color: #0f172a;
+    }
+    .to-contact {
+      margin: 2mm 0 0 8mm;
+      font-size: 14px;
+      font-weight: 700;
+      color: #0f172a;
+    }
+    .to-contact .honor {
+      font-size: 12px;
+      font-weight: 400;
+    }
+    .meta-lines {
+      margin: 0;
+      white-space: pre-wrap;
+      font-size: 11px;
+      line-height: 1.5;
+      color: #0f172a;
+    }
+    .message {
+      margin: 0;
+      font-size: 11px;
+      color: #0f172a;
+    }
+    .message + .message {
+      margin-top: 1mm;
+    }
+    .table-wrap {
+      margin-top: 4mm;
+      border: 1px solid #9aa8bf;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+      font-size: 11px;
+    }
+    thead th {
+      background: #e9eff8;
+      color: #1f2937;
+      font-weight: 700;
+      text-align: center;
+      border-bottom: 1px solid #9aa8bf;
+      border-right: 1px solid #9aa8bf;
+      padding: 3px 4px;
+    }
+    thead th:last-child {
+      border-right: none;
+    }
+    tbody td {
+      border-top: 1px solid #c5d0e2;
+      border-right: 1px solid #c5d0e2;
+      padding: 4px 5px;
+      vertical-align: top;
+      color: #111827;
+      word-break: break-word;
+      min-height: 24px;
+    }
+    tbody tr:first-child td {
+      border-top: none;
+    }
+    tbody td:last-child {
+      border-right: none;
+    }
+    tbody tr:nth-child(even) td {
+      background: #fbfdff;
+    }
+    .col-item { width: 35%; }
+    .col-maker { width: 24%; }
+    .col-qty { width: 8%; }
+    .col-due { width: 16.5%; }
+    .col-note { width: 16.5%; }
+    .qty { text-align: center; }
+    .item-main {
+      font-weight: 600;
+      letter-spacing: 0.01em;
+    }
+    tr {
+      break-inside: avoid;
+      page-break-inside: avoid;
+    }
+  </style>
+</head>
+<body>
+  <div class="sheet">
+    <div class="topline"></div>
+
+    <div class="head-row">
+      <div class="head-left">
+        <h1 class="title">注文書</h1>
+        <div class="sub-title">Purchase Order / PO-{{ order.id }}</div>
+      </div>
+      <div class="head-right">発行日: {{ issued_date }}</div>
+    </div>
+
+    <div class="party-row">
+      <div class="party-left">
+        <div class="card">
+          <p class="to-name">{{ supplier_name }} 御中</p>
+          <p class="to-contact">{{ supplier_contact }} <span class="honor">様</span></p>
+        </div>
+      </div>
+      <div class="party-right">
+        <div class="card">
+          <p class="meta-lines">{{ company_name }}
+〒{{ company_address }}
+TEL: {{ company_phone }}
+URL: {{ company_url }}
+担当: {{ order_user }}
+Email:
+{{ sender_email }}</p>
+        </div>
+      </div>
+    </div>
+
+    <p class="message">{{ body_message }}</p>
+    <p class="message">{{ body_sub_message }}</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th class="col-item">品番（品名）</th>
+            <th class="col-maker">メーカー</th>
+            <th class="col-qty">数量</th>
+            <th class="col-due">回答納期</th>
+            <th class="col-note">備考</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in rows %}
+          <tr>
+            <td><span class="item-main">{{ row.item_code }}</span>{% if row.item_name and row.item_name != row.item_code %} {{ row.item_name }}{% endif %}</td>
+            <td>{{ row.maker }}</td>
+            <td class="qty">{{ row.quantity }}</td>
+            <td>{{ row.reply_due_date }}</td>
+            <td>{{ row.note }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</body>
+</html>

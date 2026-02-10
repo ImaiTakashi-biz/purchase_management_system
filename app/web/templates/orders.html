@@ -1,11 +1,11 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="ja">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>発注管理 - 在庫不足一覧</title>
+  <title>発注管理</title>
   <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet" />
-  <script src="https://cdn.tailwindcss.com?plugins=forms,typography"></script>
+  <script src="https://cdn.tailwindcss.com?plugins=forms"></script>
   <script id="tailwind-config">
     tailwind.config = {
       theme: {
@@ -14,17 +14,12 @@
             primary: "#1152d4",
             "primary-dark": "#0e3c9a",
           },
-          fontFamily: {
-            display: ["Noto Sans JP", "Inter", "sans-serif"],
-          },
         },
       },
     };
   </script>
   <style>
-    body {
-      font-family: "Noto Sans JP", "Inter", sans-serif;
-    }
+    body { font-family: "Noto Sans JP", "Yu Gothic", sans-serif; }
     .material-symbols-outlined {
       font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
     }
@@ -34,13 +29,10 @@
   <header class="sticky top-0 z-30 bg-white border-b border-slate-200">
     <div class="max-w-screen-xl mx-auto flex flex-col gap-3 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
       <div>
-        <p class="text-xs text-slate-500 uppercase tracking-[0.3em]">社内向け購買管理</p>
-        <p class="text-2xl font-bold text-slate-900">在庫不足一覧</p>
+        <p class="text-xs text-slate-500 uppercase tracking-[0.3em]">購入品一元管理</p>
+        <p class="text-2xl font-bold">発注管理</p>
       </div>
-      <div class="flex items-center gap-4 text-xs text-slate-500 sm:gap-6">
-        <span class="material-symbols-outlined text-base">notifications</span>
-        <span>最終更新: {{ now.strftime('%Y/%m/%d %H:%M') }}</span>
-      </div>
+      <div class="text-xs text-slate-500">更新: {{ now.strftime('%Y/%m/%d %H:%M') }}</div>
     </div>
     <div class="border-t border-slate-100">
       <div class="max-w-screen-xl mx-auto flex flex-wrap items-center gap-4 px-4 py-2 text-xs uppercase tracking-[0.3em]">
@@ -50,96 +42,699 @@
       </div>
     </div>
   </header>
-  <div class="flex flex-1 overflow-hidden">
-    <aside class="hidden lg:flex w-72 flex-shrink-0 flex-col border-r border-slate-200 bg-white">
-      <div class="px-5 py-6 border-b border-slate-200">
-        <div class="flex items-center justify-between">
-          <div>
-            <p class="text-xs text-slate-500 uppercase tracking-[0.3em]">部署別項目</p>
-            <p class="text-lg font-bold text-slate-900">部署ツリー</p>
-          </div>
-        </div>
+
+  <div class="flex">
+    <aside class="hidden lg:block w-72 border-r border-slate-200 bg-white min-h-screen">
+      <div class="p-5 border-b border-slate-200">
+        <p class="text-xs text-slate-500 uppercase tracking-[0.3em]">部署</p>
+        <p class="text-lg font-semibold">絞り込み</p>
       </div>
-      <div class="flex-1 overflow-y-auto px-5 py-6 space-y-4">
+      <div class="p-5 space-y-2">
+        <button
+          class="w-full rounded-xl border px-3 py-2 text-left text-sm font-semibold {% if not selected_department %}border-primary bg-primary/10 text-primary{% else %}border-slate-200 bg-slate-50 text-slate-700{% endif %}"
+          type="button"
+          onclick="location.href='/orders'"
+        >全部署</button>
         {% for section in sidebar_structure %}
-        <div class="space-y-2">
-          <div>
-            <p class="text-sm font-semibold text-slate-900">{{ section.name if section.name else '未設定' }}</p>
-          </div>
-          <button
-            class="w-full rounded-2xl border px-3 py-2 text-left text-sm font-semibold {% if selected_department == section.name %}border-primary bg-primary/10 text-primary{% else %}border-slate-200 bg-slate-50 text-slate-600{% endif %}"
-            type="button"
-            onclick="location.href='{{ build_orders_url(section.name) }}'"
-          >
-            {{ section.name if section.name else '未設定' }}
-          </button>
-        </div>
+        <button
+          class="w-full rounded-xl border px-3 py-2 text-left text-sm font-semibold {% if selected_department == section.name %}border-primary bg-primary/10 text-primary{% else %}border-slate-200 bg-slate-50 text-slate-700{% endif %}"
+          type="button"
+          onclick="location.href='{{ build_orders_url(section.name) }}'"
+        >{{ section.name if section.name else '未設定' }}</button>
         {% endfor %}
-        <div class="space-y-2">
-          <div class="flex items-center justify-between">
-            <p class="text-sm font-semibold text-slate-900">全部署</p>
-          </div>
-          <button
-            class="w-full rounded-2xl border px-3 py-2 text-left text-sm font-semibold {% if not selected_department %}border-primary bg-primary/10 text-primary{% else %}border-slate-200 bg-slate-50 text-slate-600{% endif %}"
-            type="button"
-            onclick="location.href='/orders'"
-          >
-            全部門を表示
-          </button>
-        </div>
       </div>
     </aside>
-    <main class="flex-1 overflow-y-auto bg-slate-100">
-      <div class="max-w-screen-xl mx-auto px-4 py-6 space-y-6">
-        <section class="grid gap-4 sm:grid-cols-2">
+
+    <main class="flex-1">
+      <div class="max-w-screen-xl mx-auto p-4 space-y-6">
+        <section class="grid gap-4 sm:grid-cols-3">
           {% for card in highlight_cards %}
           <article class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
             <div class="flex items-center justify-between text-xs text-slate-500 uppercase tracking-[0.3em]">
               <span>{{ card.label }}</span>
               <span class="material-symbols-outlined text-lg text-slate-400">{{ card.icon }}</span>
             </div>
-            <p class="mt-3 text-2xl font-bold text-slate-900">{{ card.value }}</p>
+            <p class="mt-3 text-3xl font-bold">{{ card.value }}</p>
             <p class="text-xs text-slate-500">{{ card.note }}</p>
           </article>
           {% endfor %}
         </section>
-        <section class="rounded-2xl border border-slate-200 bg-white shadow-sm">
-          <header class="flex items-center justify-between border-b border-slate-100 px-5 py-4">
-            <div>
-              <p class="text-xs uppercase tracking-[0.3em] text-slate-500">在庫不足候補</p>
-              <h2 class="text-lg font-semibold text-slate-900">発注を検討する品目</h2>
+
+        <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm space-y-4">
+          <div>
+            <p class="text-xs uppercase tracking-[0.3em] text-slate-500">Step 1</p>
+            <h2 class="text-lg font-semibold">発注候補から新規発注を作成</h2>
+            <p class="text-xs text-slate-500">既存発注の操作（注文書作成・再生成・送信・取消）は、一覧に保存された発注担当者を優先して使用します。</p>
+          </div>
+          <div class="grid gap-3 md:grid-cols-3">
+            <label class="flex flex-col gap-1 text-sm">
+              <span class="text-xs text-slate-500">発注担当者（部署+表示名）</span>
+              <select id="ordered-by-user" class="rounded-xl border border-slate-200 px-3 py-2">
+                <option value="" {% if not default_order_contact %}selected{% endif %}>選択してください</option>
+                {% for contact in order_contacts %}
+                <option value="{{ contact }}" {% if default_order_contact and contact == default_order_contact %}selected{% endif %}>{{ contact }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <div class="md:col-span-2 flex flex-wrap items-end gap-2">
+              <button id="create-selected-order" type="button" class="rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-dark">選択品目で発注作成</button>
+              <button id="create-bulk-order" type="button" class="rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">仕入先ごと一括作成</button>
             </div>
+          </div>
+          <div class="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+            <p id="candidate-selection-summary" class="text-xs font-semibold text-slate-700">選択中: 0件</p>
+            <p class="text-xs text-slate-500">新規作成時は同一仕入先のみ選択可能です。</p>
+          </div>
+
+          <div class="overflow-x-auto border border-slate-200 rounded-xl">
+            <table class="min-w-full text-sm">
+              <thead class="bg-slate-50 text-xs text-slate-500 uppercase">
+                <tr>
+                  <th class="px-3 py-2">
+                    <label class="inline-flex items-center gap-2 text-xs">
+                      <input id="select-all-candidates" type="checkbox" />
+                      <span>選択</span>
+                    </label>
+                  </th>
+                  <th class="px-3 py-2 text-left">品番</th>
+                  <th class="px-3 py-2 text-left">品名</th>
+                  <th class="px-3 py-2 text-left">仕入先</th>
+                  <th class="px-3 py-2 text-right">在庫</th>
+                  <th class="px-3 py-2 text-right">発注点</th>
+                  <th class="px-3 py-2 text-right">注文数量</th>
+                  <th class="px-3 py-2 text-left">備考</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-100">
+                {% for row in low_stock_suggestions %}
+                <tr class="candidate-row hover:bg-slate-50" data-item-id="{{ row.item_id }}" data-supplier-id="{{ row.supplier_id or '' }}">
+                  <td class="px-3 py-2 text-center"><input type="checkbox" class="candidate-check" /></td>
+                  <td class="px-3 py-2 font-semibold">{{ row.item_code }}</td>
+                  <td class="px-3 py-2">{{ row.name }}</td>
+                  <td class="px-3 py-2">{{ row.supplier_name }}</td>
+                  <td class="px-3 py-2 text-right">{{ row.on_hand }}</td>
+                  <td class="px-3 py-2 text-right">{{ row.reorder_point }}</td>
+                  <td class="px-3 py-2 text-right"><input type="number" min="1" value="{{ row.order_quantity }}" class="order-qty w-20 rounded border border-slate-300 px-2 py-1 text-right" /></td>
+                  <td class="px-3 py-2"><input type="text" class="order-note w-full rounded border border-slate-300 px-2 py-1" /></td>
+                </tr>
+                {% endfor %}
+                {% if not low_stock_suggestions %}
+                <tr>
+                  <td class="px-3 py-4 text-center text-slate-500" colspan="8">発注候補はありません。</td>
+                </tr>
+                {% endif %}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm space-y-4">
+          <div class="flex items-center justify-between">
+            <h2 class="text-lg font-semibold">発注一覧</h2>
             <p class="text-xs text-slate-500">部署: {{ selected_department if selected_department else 'すべて' }}</p>
-          </header>
-          {% if low_stock_suggestions %}
-          <div class="space-y-2 px-5 py-6">
-            {% for item in low_stock_suggestions %}
-            <article class="rounded-2xl border px-4 py-3 shadow-sm transition hover:border-slate-300 {% if item.gap <= 0 %}bg-red-50 border-red-100 hover:bg-red-100{% else %}bg-emerald-50 border-emerald-100 hover:bg-emerald-100{% endif %}">
-              <div class="flex flex-col gap-1 text-sm text-slate-700 sm:flex-row sm:items-center sm:justify-between">
+          </div>
+
+          <div class="space-y-4">
+            {% for order in existing_orders %}
+            {% set can_operate_order = order.status in ['DRAFT', 'CONFIRMED', 'SENT', 'WAITING'] %}
+            {% set can_edit_due_date = order.status in ['SENT', 'WAITING'] %}
+            <article class="rounded-xl border border-slate-200 p-4 space-y-3">
+              <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
                 <div>
-                  <p class="text-xs font-semibold text-slate-500">{{ item.department }}</p>
-                  <p class="text-lg font-semibold text-slate-900">{{ item.item_code }}</p>
-                  <p class="text-xs text-slate-500">{{ item.name }}</p>
+                  <p class="text-sm text-slate-500">PO #{{ order.id }} / {{ order.department or '未設定部署' }}</p>
+                  <p class="font-semibold">{{ order.supplier_name }}</p>
+                  <p class="text-xs text-slate-500">発注担当: {{ order.ordered_by_user or '未設定' }} / 発行日: {{ order.issued_date or '未作成' }}</p>
                 </div>
-                <div class="flex flex-col gap-1 text-xs text-slate-600 sm:text-right">
-                  <span>在庫 / 発注点: {{ item.on_hand }} / {{ item.reorder_point }}</span>
-                  <span class="font-semibold {% if item.gap <= 0 %}text-red-700{% else %}text-emerald-700{% endif %}">
-                    差分: {{ item.gap_label }}
-                  </span>
-                  <span>仕入先: {{ item.supplier }}</span>
+                <div class="flex flex-wrap items-center gap-2">
+                  <span class="rounded-full border px-3 py-1 text-xs font-semibold {% if order.status == 'DRAFT' %}bg-slate-100 text-slate-700 border-slate-300{% elif order.status == 'CONFIRMED' %}bg-blue-50 text-blue-700 border-blue-200{% elif order.status == 'SENT' %}bg-indigo-50 text-indigo-700 border-indigo-200{% elif order.status == 'WAITING' %}bg-amber-50 text-amber-700 border-amber-200{% elif order.status == 'RECEIVED' %}bg-emerald-50 text-emerald-700 border-emerald-200{% else %}bg-rose-50 text-rose-700 border-rose-200{% endif %}">{{ order.status }}</span>
+                  <button class="btn-preview-doc rounded border border-slate-300 px-3 py-1 text-xs" data-order-id="{{ order.id }}">注文書プレビュー</button>
+                  <button class="btn-generate-doc rounded border border-slate-300 px-3 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-50" data-order-id="{{ order.id }}" data-regenerate="false" data-ordered-by="{{ order.ordered_by_user or '' }}" {% if not can_operate_order %}disabled title="完了済み発注は注文書作成できません"{% endif %}>注文書作成</button>
+                  <button class="btn-generate-doc rounded border border-slate-300 px-3 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-50" data-order-id="{{ order.id }}" data-regenerate="true" data-ordered-by="{{ order.ordered_by_user or '' }}" {% if not can_operate_order %}disabled title="完了済み発注は再生成できません"{% endif %}>再生成</button>
+                  <button class="btn-email-preview rounded bg-primary px-3 py-1 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50" data-order-id="{{ order.id }}" data-ordered-by="{{ order.ordered_by_user or '' }}" {% if not can_operate_order %}disabled title="完了済み発注はメール操作できません"{% endif %}>メールプレビュー</button>
                 </div>
               </div>
+
+              <div class="flex flex-wrap gap-2">
+                {% if order.status == 'SENT' or order.status == 'WAITING' %}
+                <span class="rounded border border-slate-200 bg-slate-50 px-3 py-1 text-xs text-slate-500">入庫計上は「入出荷管理」で実行してください</span>
+                {% endif %}
+                {% if order.status != 'RECEIVED' and order.status != 'CANCELLED' %}
+                <button class="btn-update-status rounded border border-rose-300 px-3 py-1 text-xs text-rose-700" data-order-id="{{ order.id }}" data-order-status="{{ order.status }}" data-status="CANCELLED" data-ordered-by="{{ order.ordered_by_user or '' }}">取消</button>
+                {% endif %}
+              </div>
+
+              <div class="overflow-x-auto border border-slate-200 rounded-xl">
+                <table class="min-w-full text-sm">
+                  <thead class="bg-slate-50 text-xs text-slate-500 uppercase">
+                    <tr>
+                      <th class="px-3 py-2 text-left">品番</th>
+                      <th class="px-3 py-2 text-left">品名</th>
+                      <th class="px-3 py-2 text-left">メーカー</th>
+                      <th class="px-3 py-2 text-right">数量</th>
+                      <th class="px-3 py-2 text-left">回答納期(転記)</th>
+                      <th class="px-3 py-2 text-left">備考</th>
+                    </tr>
+                  </thead>
+                  <tbody class="divide-y divide-slate-100">
+                    {% for line in order.lines %}
+                    <tr>
+                      <td class="px-3 py-2">{{ line.item_code }}</td>
+                      <td class="px-3 py-2">{{ line.item_name }}</td>
+                      <td class="px-3 py-2">{{ line.maker }}</td>
+                      <td class="px-3 py-2 text-right">{{ line.quantity }}</td>
+                      <td class="px-3 py-2">
+                        {% if can_edit_due_date %}
+                        <div class="flex gap-2">
+                          <input type="date" class="reply-due-input rounded border border-slate-300 px-2 py-1" value="{{ line.vendor_reply_due_date }}" data-line-id="{{ line.id }}" />
+                          <button class="btn-save-due rounded border border-slate-300 px-2 py-1 text-xs" data-line-id="{{ line.id }}">保存</button>
+                        </div>
+                        {% else %}
+                        <div class="text-xs text-slate-500">{{ line.vendor_reply_due_date or '-' }}</div>
+                        {% endif %}
+                      </td>
+                      <td class="px-3 py-2">{{ line.note }}</td>
+                    </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+              {% if order.pdf_path %}
+              <p class="text-xs text-slate-500">PDF: {{ order.pdf_path }}</p>
+              {% endif %}
             </article>
             {% endfor %}
+            {% if not existing_orders %}
+            <p class="text-sm text-slate-500">発注データはまだありません。</p>
+            {% endif %}
           </div>
-          {% else %}
-          <div class="px-5 py-6 text-sm text-slate-500">
-            現時点で在庫不足の品目はありません。
-          </div>
-          {% endif %}
         </section>
       </div>
     </main>
   </div>
+
+  <div id="email-preview-modal" class="hidden fixed inset-0 z-50 items-center justify-center p-4">
+    <div class="absolute inset-0 bg-slate-900/50" data-close-email-modal></div>
+    <div class="relative w-full max-w-3xl rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl space-y-4">
+      <div class="flex items-center justify-between">
+        <h3 class="text-lg font-semibold">メール送信プレビュー</h3>
+        <button class="text-slate-400 hover:text-slate-700" data-close-email-modal>閉じる</button>
+      </div>
+      <div class="grid gap-2 text-sm">
+        <div><span class="font-semibold">To:</span> <span id="preview-to"></span></div>
+        <div><span class="font-semibold">CC:</span> <span id="preview-cc"></span></div>
+        <div><span class="font-semibold">件名:</span> <span id="preview-subject"></span></div>
+        <div><span class="font-semibold">添付:</span> <span id="preview-attachment"></span></div>
+      </div>
+      <textarea id="preview-body" class="w-full h-48 rounded-xl border border-slate-300 p-3 text-sm" readonly></textarea>
+      <label class="inline-flex items-center gap-2 text-sm">
+        <input id="preview-regenerate" type="checkbox" />
+        <span>送信前に注文書を再生成する（別名保存）</span>
+      </label>
+      <div class="flex justify-end gap-2">
+        <button class="rounded border border-slate-300 px-4 py-2 text-sm" data-close-email-modal>キャンセル</button>
+        <button id="preview-send" class="rounded bg-primary px-4 py-2 text-sm font-semibold text-white">送信</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="global-loading" class="hidden fixed inset-0 z-[70] items-center justify-center bg-slate-900/40">
+    <div class="rounded-2xl bg-white px-6 py-5 shadow-2xl border border-slate-200 min-w-[260px]">
+      <div class="flex items-center gap-3">
+        <div class="h-6 w-6 rounded-full border-2 border-slate-200 border-t-primary animate-spin"></div>
+        <div>
+          <p class="text-sm font-semibold text-slate-800">処理中</p>
+          <p id="global-loading-message" class="text-xs text-slate-500">しばらくお待ちください...</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast-container" class="pointer-events-none fixed right-4 top-4 z-[80] flex w-[340px] max-w-[calc(100vw-2rem)] flex-col gap-2"></div>
+
+  <script id="orders-context" type="application/json">
+    {{ {'selected_department': selected_department} | tojson | safe }}
+  </script>
+
+  <script>
+    document.addEventListener('DOMContentLoaded', function () {
+      const contextEl = document.getElementById('orders-context');
+      const context = contextEl ? JSON.parse(contextEl.textContent || '{}') : {};
+      const selectedDepartment = context.selected_department || '';
+      const orderedByInput = document.getElementById('ordered-by-user');
+      const createSelectedButton = document.getElementById('create-selected-order');
+      const createBulkButton = document.getElementById('create-bulk-order');
+      const selectAllCandidates = document.getElementById('select-all-candidates');
+      const selectionSummary = document.getElementById('candidate-selection-summary');
+      const candidateChecks = Array.from(document.querySelectorAll('.candidate-check'));
+      let createSelectedInProgress = false;
+      let createBulkInProgress = false;
+
+      const emailModal = document.getElementById('email-preview-modal');
+      const previewTo = document.getElementById('preview-to');
+      const previewCc = document.getElementById('preview-cc');
+      const previewSubject = document.getElementById('preview-subject');
+      const previewAttachment = document.getElementById('preview-attachment');
+      const previewBody = document.getElementById('preview-body');
+      const previewSendButton = document.getElementById('preview-send');
+      const previewRegenerate = document.getElementById('preview-regenerate');
+      const loadingOverlay = document.getElementById('global-loading');
+      const loadingMessage = document.getElementById('global-loading-message');
+      const toastContainer = document.getElementById('toast-container');
+
+      let currentPreviewOrderId = null;
+      let currentPreviewOrderedBy = '';
+      const MIN_LOADING_VISIBLE_MS = 450;
+      const FLASH_TOAST_KEY = 'pms_flash_toast_orders';
+      let loadingStartedAt = 0;
+
+      const setLoading = (isLoading, message = 'しばらくお待ちください...') => {
+        if (!loadingOverlay || !loadingMessage) {
+          return;
+        }
+        if (isLoading) {
+          loadingStartedAt = Date.now();
+          loadingMessage.textContent = message;
+          loadingOverlay.classList.remove('hidden');
+          loadingOverlay.classList.add('flex');
+          return;
+        }
+        const elapsed = Date.now() - loadingStartedAt;
+        const waitMs = Math.max(0, MIN_LOADING_VISIBLE_MS - elapsed);
+        setTimeout(() => {
+          loadingOverlay.classList.add('hidden');
+          loadingOverlay.classList.remove('flex');
+        }, waitMs);
+      };
+
+      const showToast = (message, kind = 'info') => {
+        if (!toastContainer) {
+          return;
+        }
+        const toneClass = {
+          success: 'border-emerald-200 bg-emerald-50 text-emerald-800',
+          error: 'border-rose-200 bg-rose-50 text-rose-800',
+          warning: 'border-amber-200 bg-amber-50 text-amber-800',
+          info: 'border-slate-200 bg-white text-slate-800',
+        };
+        const toast = document.createElement('div');
+        toast.className = `pointer-events-auto rounded-xl border px-3 py-2 shadow-sm transition-opacity ${toneClass[kind] || toneClass.info}`;
+        toast.innerHTML = `<p class="text-sm font-semibold">${message}</p>`;
+        toastContainer.appendChild(toast);
+        setTimeout(() => {
+          toast.classList.add('opacity-0');
+          setTimeout(() => toast.remove(), 200);
+        }, 2800);
+      };
+
+      const consumeFlashToast = () => {
+        try {
+          const raw = sessionStorage.getItem(FLASH_TOAST_KEY);
+          if (!raw) {
+            return;
+          }
+          sessionStorage.removeItem(FLASH_TOAST_KEY);
+          const payload = JSON.parse(raw);
+          const message = String(payload?.message || '').trim();
+          const kind = String(payload?.kind || 'info');
+          if (message) {
+            showToast(message, kind);
+          }
+        } catch {
+          sessionStorage.removeItem(FLASH_TOAST_KEY);
+        }
+      };
+
+      const reloadWithToast = (message, kind = 'success', delayMs = 120) => {
+        try {
+          sessionStorage.setItem(
+            FLASH_TOAST_KEY,
+            JSON.stringify({ message: String(message || ''), kind, at: Date.now() }),
+          );
+        } catch {}
+        setTimeout(() => location.reload(), delayMs);
+      };
+
+      consumeFlashToast();
+
+      const jsonRequest = async (url, options = {}) => {
+        const response = await fetch(url, {
+          headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+          ...options,
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(payload.detail || 'リクエストに失敗しました。');
+        }
+        return payload;
+      };
+
+      const setButtonBusy = (button, isBusy) => {
+        if (!button) {
+          return;
+        }
+        if (isBusy) {
+          button.dataset.busy = '1';
+          button.disabled = true;
+          button.classList.add('opacity-60', 'cursor-not-allowed');
+          return;
+        }
+        button.dataset.busy = '0';
+        if (!button.hasAttribute('data-static-disabled')) {
+          button.disabled = false;
+        }
+        button.classList.remove('opacity-60', 'cursor-not-allowed');
+      };
+
+      document.querySelectorAll('button[disabled]').forEach((button) => {
+        button.dataset.staticDisabled = '1';
+      });
+
+      const getOrderedBy = (fallback = '') => {
+        const value = (orderedByInput?.value || '').trim();
+        if (value) {
+          return value;
+        }
+        return (fallback || '').trim();
+      };
+
+      const getOrderedByForExistingOrder = (fallback = '') => {
+        const orderValue = (fallback || '').trim();
+        if (orderValue) {
+          return orderValue;
+        }
+        return getOrderedBy();
+      };
+
+      const syncCandidateSelectionUi = () => {
+        const selectedChecks = candidateChecks.filter((check) => check.checked);
+        const selectedRows = selectedChecks.map((check) => check.closest('tr')).filter((row) => !!row);
+        const suppliers = new Set(selectedRows.map((row) => String(row.dataset.supplierId || '')));
+        selectedRows.forEach((row) => row.classList.add('bg-blue-50'));
+        candidateChecks
+          .map((check) => check.closest('tr'))
+          .filter((row) => !!row && !selectedRows.includes(row))
+          .forEach((row) => row.classList.remove('bg-blue-50'));
+
+        if (selectionSummary) {
+          const supplierLabel = suppliers.size === 1 ? '1社' : `${suppliers.size}社`;
+          selectionSummary.textContent = `選択中: ${selectedRows.length}件 / 仕入先: ${selectedRows.length ? supplierLabel : '-'}`;
+        }
+        if (selectAllCandidates) {
+          const total = candidateChecks.length;
+          const selected = selectedChecks.length;
+          selectAllCandidates.indeterminate = selected > 0 && selected < total;
+          selectAllCandidates.checked = total > 0 && selected === total;
+        }
+      };
+
+      if (selectAllCandidates) {
+        selectAllCandidates.addEventListener('change', () => {
+          candidateChecks.forEach((check) => {
+            check.checked = selectAllCandidates.checked;
+          });
+          syncCandidateSelectionUi();
+        });
+      }
+      candidateChecks.forEach((check) => {
+        check.addEventListener('change', syncCandidateSelectionUi);
+      });
+      syncCandidateSelectionUi();
+
+      createSelectedButton?.addEventListener('click', async () => {
+        if (createSelectedInProgress) {
+          return;
+        }
+        createSelectedInProgress = true;
+        if (createSelectedButton) {
+          createSelectedButton.disabled = true;
+          createSelectedButton.classList.add('opacity-60', 'cursor-not-allowed');
+        }
+        try {
+          const orderedBy = getOrderedBy();
+          if (!orderedBy) {
+            throw new Error('新規発注を作成する場合は、発注担当者を選択してください。');
+          }
+          const selectedRows = Array.from(document.querySelectorAll('.candidate-check:checked'))
+            .map((checkbox) => checkbox.closest('tr'))
+            .filter((row) => !!row);
+          if (!selectedRows.length) {
+            throw new Error('発注対象を選択してください。');
+          }
+          const supplierIds = new Set(selectedRows.map((row) => String(row.dataset.supplierId || '')));
+          if (supplierIds.size !== 1 || supplierIds.has('')) {
+            throw new Error('異なる仕入先を同時に選択できません。');
+          }
+          const lines = selectedRows.map((row) => {
+            const qtyInput = row.querySelector('.order-qty');
+            const noteInput = row.querySelector('.order-note');
+            return {
+              item_id: Number(row.dataset.itemId),
+              quantity: Number(qtyInput?.value || 0),
+              note: (noteInput?.value || '').trim(),
+            };
+          });
+          setLoading(true, '発注を作成しています...');
+          const result = await jsonRequest('/purchase-orders', {
+            method: 'POST',
+            body: JSON.stringify({
+              department: selectedDepartment,
+              ordered_by_user: orderedBy,
+              lines,
+            }),
+          });
+          if (result.reused) {
+            reloadWithToast(`同一内容の既存発注を再利用しました (PO #${result.purchase_order_id})。`, 'warning');
+          } else {
+            reloadWithToast('発注を作成しました。', 'success');
+          }
+        } catch (error) {
+          showToast(error.message || String(error), 'error');
+        } finally {
+          setLoading(false);
+          createSelectedInProgress = false;
+          if (createSelectedButton) {
+            createSelectedButton.disabled = false;
+            createSelectedButton.classList.remove('opacity-60', 'cursor-not-allowed');
+          }
+        }
+      });
+
+      createBulkButton?.addEventListener('click', async () => {
+        if (createBulkInProgress) {
+          return;
+        }
+        createBulkInProgress = true;
+        if (createBulkButton) {
+          createBulkButton.disabled = true;
+          createBulkButton.classList.add('opacity-60', 'cursor-not-allowed');
+        }
+        try {
+          const orderedBy = getOrderedBy();
+          if (!orderedBy) {
+            throw new Error('一括作成する場合は、発注担当者を選択してください。');
+          }
+          setLoading(true, '一括発注を作成しています...');
+          const result = await jsonRequest('/purchase-orders/bulk-from-low-stock', {
+            method: 'POST',
+            body: JSON.stringify({
+              department: selectedDepartment,
+              ordered_by_user: orderedBy,
+            }),
+          });
+          const created = Number(result.created_count || 0);
+          const reused = Number(result.reused_count || 0);
+          reloadWithToast(`一括作成: 新規 ${created}件 / 既存再利用 ${reused}件`, 'success');
+        } catch (error) {
+          showToast(error.message || String(error), 'error');
+        } finally {
+          setLoading(false);
+          createBulkInProgress = false;
+          if (createBulkButton) {
+            createBulkButton.disabled = false;
+            createBulkButton.classList.remove('opacity-60', 'cursor-not-allowed');
+          }
+        }
+      });
+
+      document.querySelectorAll('.btn-preview-doc').forEach((button) => {
+        button.addEventListener('click', () => {
+          const orderId = button.dataset.orderId;
+          window.open(`/purchase-orders/${orderId}/document-preview`, '_blank');
+        });
+      });
+
+      document.querySelectorAll('.btn-generate-doc').forEach((button) => {
+        button.addEventListener('click', async () => {
+          if (button.dataset.busy === '1') {
+            return;
+          }
+          setButtonBusy(button, true);
+          try {
+            const orderedBy = getOrderedByForExistingOrder(button.dataset.orderedBy);
+            const orderId = button.dataset.orderId;
+            const regenerate = button.dataset.regenerate === 'true';
+            setLoading(true, regenerate ? '注文書を再生成しています...' : '注文書を作成しています...');
+            await jsonRequest(`/purchase-orders/${orderId}/document`, {
+              method: 'POST',
+              body: JSON.stringify({ generated_by: orderedBy, regenerate }),
+            });
+            reloadWithToast(regenerate ? '注文書を再生成しました。' : '注文書を作成しました。', 'success');
+          } catch (error) {
+            showToast(error.message || String(error), 'error');
+          } finally {
+            setLoading(false);
+            setButtonBusy(button, false);
+          }
+        });
+      });
+
+      const openEmailModal = () => {
+        emailModal.classList.remove('hidden');
+        emailModal.classList.add('flex');
+      };
+
+      const closeEmailModal = () => {
+        emailModal.classList.add('hidden');
+        emailModal.classList.remove('flex');
+        currentPreviewOrderId = null;
+        currentPreviewOrderedBy = '';
+      };
+
+      emailModal.querySelectorAll('[data-close-email-modal]').forEach((el) => {
+        el.addEventListener('click', closeEmailModal);
+      });
+
+      document.querySelectorAll('.btn-email-preview').forEach((button) => {
+        button.addEventListener('click', async () => {
+          if (button.dataset.busy === '1') {
+            return;
+          }
+          setButtonBusy(button, true);
+          try {
+            const orderId = button.dataset.orderId;
+            setLoading(true, 'メールプレビューを取得しています...');
+            const preview = await jsonRequest(`/purchase-orders/${orderId}/email-preview`, { method: 'GET' });
+            currentPreviewOrderId = orderId;
+            currentPreviewOrderedBy = (button.dataset.orderedBy || '').trim();
+            previewTo.textContent = preview.to || '-';
+            previewCc.textContent = preview.cc || '-';
+            previewSubject.textContent = preview.subject || '-';
+            previewAttachment.textContent = preview.attachment_path || '-';
+            previewBody.value = preview.body || '';
+            previewRegenerate.checked = false;
+            openEmailModal();
+          } catch (error) {
+            showToast(error.message || String(error), 'error');
+          } finally {
+            setLoading(false);
+            setButtonBusy(button, false);
+          }
+        });
+      });
+
+      previewSendButton?.addEventListener('click', async () => {
+        if (previewSendButton.dataset.busy === '1') {
+          return;
+        }
+        setButtonBusy(previewSendButton, true);
+        try {
+          const orderedBy = getOrderedByForExistingOrder(currentPreviewOrderedBy);
+          if (!currentPreviewOrderId) {
+            throw new Error('送信対象が未選択です。');
+          }
+          setLoading(true, 'メールを送信しています...');
+          await jsonRequest(`/purchase-orders/${currentPreviewOrderId}/send-email`, {
+            method: 'POST',
+            body: JSON.stringify({
+              sent_by: orderedBy,
+              regenerate: !!previewRegenerate.checked,
+            }),
+          });
+          closeEmailModal();
+          reloadWithToast('メール送信が完了しました。', 'success');
+        } catch (error) {
+          showToast(error.message || String(error), 'error');
+        } finally {
+          setLoading(false);
+          setButtonBusy(previewSendButton, false);
+        }
+      });
+
+      document.querySelectorAll('.btn-save-due').forEach((button) => {
+        button.addEventListener('click', async () => {
+          if (button.dataset.busy === '1') {
+            return;
+          }
+          setButtonBusy(button, true);
+          try {
+            const lineId = button.dataset.lineId;
+            const input = document.querySelector(`.reply-due-input[data-line-id="${lineId}"]`);
+            const dueDate = (input?.value || '').trim();
+            if (!dueDate) {
+              throw new Error('回答納期を入力してください。');
+            }
+            setLoading(true, '回答納期を保存しています...');
+            await jsonRequest(`/purchase-order-lines/${lineId}/reply-due-date`, {
+              method: 'POST',
+              body: JSON.stringify({ due_date: dueDate }),
+            });
+            reloadWithToast('回答納期を保存しました。', 'success');
+          } catch (error) {
+            showToast(error.message || String(error), 'error');
+          } finally {
+            setLoading(false);
+            setButtonBusy(button, false);
+          }
+        });
+      });
+
+      document.querySelectorAll('.btn-update-status').forEach((button) => {
+        button.addEventListener('click', async () => {
+          if (button.dataset.busy === '1') {
+            return;
+          }
+          setButtonBusy(button, true);
+          try {
+            const orderedBy = getOrderedByForExistingOrder(button.dataset.orderedBy);
+            const orderId = button.dataset.orderId;
+            const status = button.dataset.status;
+            const currentStatus = String(button.dataset.orderStatus || '').toUpperCase();
+            if (status === 'CANCELLED') {
+              if (currentStatus === 'SENT' || currentStatus === 'WAITING') {
+                const expectedText = `PO #${orderId}`;
+                const entered = window.prompt(`送信済み発注を取消します。確認のため「${expectedText}」を入力してください。`, '') || '';
+                if (entered.trim() !== expectedText) {
+                  showToast('取消を中止しました。', 'info');
+                  return;
+                }
+              }
+              const ok = window.confirm('この発注を取り消します。よろしいですか？');
+              if (!ok) {
+                showToast('取消を中止しました。', 'info');
+                return;
+              }
+            }
+            if (status === 'RECEIVED') {
+              const ok = window.confirm('納品計上を実行します。在庫へ加算されます。よろしいですか？');
+              if (!ok) {
+                return;
+              }
+            }
+            setLoading(true, 'ステータスを更新しています...');
+            await jsonRequest(`/purchase-orders/${orderId}/status`, {
+              method: 'POST',
+              body: JSON.stringify({ status, updated_by: orderedBy }),
+            });
+            reloadWithToast(`ステータスを ${status} に更新しました。`, 'success');
+          } catch (error) {
+            showToast(error.message || String(error), 'error');
+          } finally {
+            setLoading(false);
+            setButtonBusy(button, false);
+          }
+        });
+      });
+    });
+  </script>
 </body>
 </html>

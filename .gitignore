@@ -54,6 +54,10 @@ Thumbs.db
 .env
 .env.*
 
+# ローカル設定JSON（機密情報を含む場合がある）
+config/email_settings.json
+config/company_profile.json
+
 # =========================
 # ビルド・配布物
 # =========================
@@ -69,6 +73,8 @@ dist/
 # 生成データ・一時データ
 data/tmp/
 data/output/
+data/layout_tuning/
+data/sample_po_page1.png
 
 # =========================
 # UI参考ファイル（必要なら管理）

@@ -1,58 +1,116 @@
 # 購入品一元管理システム
 
-## 概要
-社内で使用する購入品（刃物・検査治具・消耗品等）について、在庫管理・発注管理・納品管理を一元管理する社内向けWebアプリです。FastAPI をベースにしたサーバーサイドアプリとして構築しています。
+FastAPI + SQLite で在庫管理と発注管理を行う社内向けアプリです。
 
-## セットアップ手順
-1. 仮想環境を作成したうえで、ルートで依存をインストールしてください。
-   ```bash
-   pip install -r requirements.txt
-   ```
-2. SQLite データベースを準備します（テーブルが未作成の場合は自動で作成されます）。
-3. CSV を使って `items` / `inventory_items` を初期投入するには、以下を実行します。
-   ```bash
-   python scripts/import_items.py
-   ```
-   `data/seed/仕入品マスタ.csv` と `data/seed/仕入先マスタ.csv` を正データとして読み込み、品目/仕入先情報を `items` / `inventory_items` / `inventory_transactions` に反映します。
+## 主な機能
+- ダッシュボード（在庫/発注/入出荷の集約表示）
+- 在庫一覧（検索・絞り込み・不足判定）
+- 在庫の出庫・数量調整・履歴表示
+- 入出荷管理（入庫待ち発注の入庫計上、分納対応、管理者在庫調整）
+- 仕入先/仕入品マスタ管理
+- メール設定管理（admin権限、keyring連携）
+- 発注管理
+  - 低在庫候補から発注作成（選択作成 / 仕入先ごと一括作成）
+  - 注文書PDFプレビュー・PDF生成（Playwright）
+  - NAS保存（パスのみDB保存）
+  - SMTPメール送信（プレビュー→確認→送信）
+  - 送信ログ保存
+  - 回答納期（明細行単位）転記
 
-## ディレクトリ構成（概要）
-
-```text
-app/            : Webアプリ実装本体（FastAPI）
-ui_reference/   : UI参考HTML・画像（実行しない）
-data/seed/      : DB初期投入用CSV
-scripts/        : CSVインポート等のバッチ処理
-docs/           : 要件定義・設計資料
+## セットアップ（Windows）
+1. 依存インストール
+```powershell
+pip install -r requirements.txt
 ```
 
-## 重要なファイル
-- `requirements.txt`：依存一覧（FastAPI / SQLAlchemy / Alembic など）
-- `app/main.py`：在庫一覧 UI / API のエントリポイント
-- `scripts/import_items.py`：CSV から `items` / `inventory_items` / `inventory_transactions` を構築するスクリプト
-- `data/seed/仕入品マスタ.csv`：CSV 正データ。これを変更したら再度 `import_items.py` を実行してください。
+2. Playwrightブラウザ導入
+```powershell
+python -m playwright install chromium
+```
 
-## 運用 UI：仕入品・仕入先の編集
+3. DB初期化 + CSV取込
+```powershell
+python scripts/import_items.py
+```
 
-- `GET /manage/data` - 仕入先一覧・仕入品一覧と、仕入先/仕入品の追加・編集フォームを提供する UI。仕入先には検索ボックスを設けて一覧を絞り込み、仕入品は検索／API 呼び出しで絞り込みながら選択・編集します。既存データをクリックするとフォームに読み込まれ、保存で `/api/suppliers` または `/api/items` に送信します（成功時は画面をリロードして一覧を更新）。
+4. SMTP設定ファイル編集（パスワードは保存しない）
+- `config/email_settings.json`
+  - `smtp_server`
+  - `smtp_port`
+  - `accounts`（表示名 + sender + department）
+  - `department_defaults`（部署ごとの既定アカウント）
 
-## API: 仕入品・仕入先管理
+5. 会社情報設定（注文書/署名用）
+- `config/company_profile.json`
+  - `company_name`
+  - `address`
+  - `url`
+  - `default_phone`
+  - `department_phones`
 
-- `POST /api/suppliers` / `PUT /api/suppliers/{id}`：仕入先名・担当者・備考を受け、同名チェックやリレーションを踏まえて追加/更新します。
-- `POST /api/items` / `PUT /api/items/{id}`：品番・品名・カテゴリ・用途・部署・メーカー・棚番・単位・発注点・仕入先を受け、品番重複を防ぎながら仕入品を追加/更新します。この API が動くことで CSV バッチを使わず Web UI だけでマスタを変更できます。
+6. SMTPパスワードをkeyringへ保存
+```powershell
+python -m keyring set purchase_order_app <accounts.*.sender>
+```
 
-## API: 持出し記録
+7. 起動
+```powershell
+uvicorn app.main:app --reload --port 8000
+```
 
-- `POST /api/inventory/issues`
-  - リクエスト JSON: `{ "item_code": "...", "quantity": 2 }`
-  - レスポンス JSON:
-    - `item_code`, `on_hand`, `reorder_point`, `gap_label`, `status_label`, `status_badge`, `status_description`
-    - `last_activity`, `last_updated`, `supplier`, `message`
-  - 在庫モーダルの「確定」ボタンでは、現在の在庫数とプラス/マイナス入力で決めた値との差分を見て、数が減る場合はこの API を自動的に呼び、出庫トランザクション（Issue）を記録します。増加操作の場合は `/inventory/inline-adjust` が呼ばれます。
-  - 画面は API を意識する必要がなく、「確定」で操作が完了し、内部的に `inventory_transactions` に記録が残ります（`created_by="system"`）。
+## ログイン/権限
+- 本システムはログイン必須です。
+- トップページ `/` は `/dashboard` へリダイレクトされます。
+- 起動時、`app_users` に管理者ユーザーが存在しない場合は初期管理者を自動作成します。
+  - ユーザー名: `APP_BOOTSTRAP_ADMIN_USERNAME`（既定: `admin`）
+  - パスワード: `APP_BOOTSTRAP_ADMIN_PASSWORD`（既定: `admin12345`）
+  - 表示名: `APP_BOOTSTRAP_ADMIN_DISPLAY_NAME`（既定: `管理者`）
+- 既定値のまま運用せず、初回起動前に環境変数で変更してください。
+- 役割:
+  - `viewer`: 在庫/履歴の閲覧
+  - `manager`: 発注処理、在庫更新
+  - `admin`: データ管理、SMTP設定編集、上記すべて
+- データ管理画面:
+  - `manager`: `/manage/suppliers`, `/manage/items`
+  - `admin`: `/manage/email-settings`（加えて manager 画面も利用可）
 
-## API: 直近トランザクション取得
+## NAS設定
+- 既定保存先（環境変数未指定時）
+  - `\\192.168.1.200\共有\dev_tools\発注管理システム\注文書`
+- 保存階層
+  - `注文書\部署名\仕入先名\PO_<order_id>_<yyyymmdd>.pdf`
+- フォルダ名は Windows 禁則文字を除去して自動作成
+- 開発機でNASを使わない場合は環境変数で上書き可能
+```powershell
+$env:PURCHASE_ORDER_NAS_ROOT='C:\temp\po_docs'
+```
 
-- `GET /recent-transactions`
-  - クエリパラメータ: `limit`（オプション、1〜20 件、デフォルト 4）
-  - レスポンス JSON: `{"transactions": [...]}` 形式で `item`, `department`, `summary`, `shelf`, `item_code`, `manufacturer`, `delta`, `note`, `date` を返します。
-  - モーダルの「確定」直後にフロントエンドからこのエンドポイントを呼び、画面の履歴一覧をリフレッシュする仕組みです。
+## 発注API（主要）
+- `POST /purchase-orders`
+- `POST /purchase-orders/bulk-from-low-stock`
+- `GET /purchase-orders/{id}/document-preview`
+- `POST /purchase-orders/{id}/document`
+- `GET /purchase-orders/{id}/email-preview`
+- `POST /purchase-orders/{id}/send-email`
+- `POST /purchase-order-lines/{line_id}/reply-due-date`
+- `POST /purchase-orders/{id}/status`
+
+## 成功/失敗時の挙動
+- メール未登録
+  - 送信不可
+  - 400エラー返却
+  - `email_send_logs` に失敗理由を記録
+- SMTP失敗
+  - 400エラー返却
+  - `email_send_logs` に失敗理由を記録
+- NAS書き込み不可
+  - 「PDF生成成功 / NAS保存失敗」を区別してエラー返却
+  - `email_send_logs` に失敗理由を記録
+- 再送時
+  - 既存PDFを再利用（既定）
+  - 再生成ONの場合は別名（`_v2`, `_v3`...）で保存
+
+## 既存在庫機能への影響
+- 既存の在庫一覧・出庫・調整・履歴API/画面は維持
+- 納品計上は `POST /purchase-orders/{id}/status` で `RECEIVED` 遷移時のみ実行
+- 在庫計上時は既存と同じ `inventory_items` / `inventory_transactions` に追記するため、在庫機能との整合性を維持

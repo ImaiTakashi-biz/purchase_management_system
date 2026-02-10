@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>データ管理 | 仕入先</title>
+  <script src="https://cdn.tailwindcss.com?plugins=forms"></script>
+  <style>
+    body { font-family: "Noto Sans JP", "Yu Gothic", sans-serif; }
+  </style>
+</head>
+<body class="bg-slate-100 text-slate-900 min-h-screen">
+  <header class="sticky top-0 z-30 bg-white border-b border-slate-200 shadow-sm">
+    <div class="max-w-screen-xl mx-auto px-4 py-4 flex items-center justify-between">
+      <div>
+        <p class="text-xs text-slate-500 uppercase tracking-[0.3em]">購入品一元管理</p>
+        <p class="text-2xl font-bold">データ管理</p>
+      </div>
+      <p class="text-xs text-slate-500">更新: {{ now.strftime('%Y/%m/%d %H:%M') }}</p>
+    </div>
+    <div class="border-t border-slate-100">
+      <div class="max-w-screen-xl mx-auto flex flex-wrap items-center gap-4 px-4 py-2 text-xs uppercase tracking-[0.3em]">
+        {% for link in nav_links %}
+        <a href="{{ link.href }}" class="py-2 {% if link.active %}text-blue-700 border-b-2 border-blue-700{% else %}text-slate-500 hover:text-slate-900{% endif %}">
+          {{ link.label }}
+        </a>
+        {% endfor %}
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-screen-xl mx-auto px-4 py-6 space-y-4">
+    <section class="rounded-2xl border border-slate-200 bg-white p-3">
+      <div class="flex flex-wrap gap-2">
+        {% for section in manage_sections %}
+        <a href="{{ section.href }}" class="rounded-xl px-4 py-2 text-sm font-semibold {% if section.active %}bg-blue-600 text-white{% else %}border border-slate-300 text-slate-700 hover:bg-slate-50{% endif %}">
+          {{ section.label }}
+        </a>
+        {% endfor %}
+      </div>
+    </section>
+
+    <section class="grid gap-4 lg:grid-cols-2">
+      <article class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm space-y-4">
+        <div>
+          <p class="text-xs uppercase tracking-[0.3em] text-slate-500">Supplier</p>
+          <h2 class="text-lg font-semibold">仕入先を追加 / 編集</h2>
+        </div>
+        <div class="space-y-1">
+          <label class="text-xs text-slate-500">仕入先検索</label>
+          <input id="supplier-search" list="supplier-suggestions" type="search" placeholder="仕入先名で絞り込む" class="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm" />
+          <datalist id="supplier-suggestions">
+            {% for supplier in suppliers %}
+            <option value="{{ supplier.name }}">{{ supplier.contact_person or '' }}</option>
+            {% endfor %}
+          </datalist>
+        </div>
+
+        <form id="supplier-form" class="space-y-3">
+          <input type="hidden" id="supplier-id" value="" />
+          <label class="flex flex-col gap-1 text-sm">
+            <span class="text-xs text-slate-500">仕入先名</span>
+            <input id="supplier-name" type="text" required class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2" />
+          </label>
+          <label class="flex flex-col gap-1 text-sm">
+            <span class="text-xs text-slate-500">担当者</span>
+            <input id="supplier-contact" type="text" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2" />
+          </label>
+          <div class="grid gap-2 md:grid-cols-2">
+            <label class="flex flex-col gap-1 text-sm">
+              <span class="text-xs text-slate-500">携帯</span>
+              <input id="supplier-mobile" type="text" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2" />
+            </label>
+            <label class="flex flex-col gap-1 text-sm">
+              <span class="text-xs text-slate-500">電話</span>
+              <input id="supplier-phone" type="text" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2" />
+            </label>
+          </div>
+          <div class="grid gap-2 md:grid-cols-2">
+            <label class="flex flex-col gap-1 text-sm">
+              <span class="text-xs text-slate-500">メール</span>
+              <input id="supplier-email" type="email" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2" />
+            </label>
+            <label class="flex flex-col gap-1 text-sm">
+              <span class="text-xs text-slate-500">FAX</span>
+              <input id="supplier-fax" type="text" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2" />
+            </label>
+          </div>
+          <div class="grid gap-2 md:grid-cols-2">
+            <label class="flex flex-col gap-1 text-sm">
+              <span class="text-xs text-slate-500">アシスタント名</span>
+              <input id="supplier-assistant-name" type="text" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2" />
+            </label>
+            <label class="flex flex-col gap-1 text-sm">
+              <span class="text-xs text-slate-500">アシスタントメール</span>
+              <input id="supplier-assistant-email" type="email" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2" />
+            </label>
+          </div>
+          <label class="flex flex-col gap-1 text-sm">
+            <span class="text-xs text-slate-500">備考</span>
+            <input id="supplier-notes" type="text" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2" />
+          </label>
+          <div class="flex gap-2">
+            <button type="submit" class="flex-1 rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700">保存</button>
+            <button type="button" id="supplier-form-reset" class="rounded-xl border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50">新規</button>
+          </div>
+        </form>
+      </article>
+
+      <article class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm space-y-3">
+        <div>
+          <p class="text-xs uppercase tracking-[0.3em] text-slate-500">List</p>
+          <h2 class="text-lg font-semibold">仕入先一覧</h2>
+        </div>
+        <div id="supplier-list" class="space-y-2">
+          {% for supplier in suppliers %}
+          <div class="supplier-row rounded-xl border border-slate-200 bg-slate-50 p-3 cursor-pointer hover:bg-slate-100"
+               data-id="{{ supplier.id }}"
+               data-name="{{ supplier.name }}"
+               data-contact="{{ supplier.contact_person or '' }}"
+               data-mobile="{{ supplier.mobile_number or '' }}"
+               data-phone="{{ supplier.phone_number or '' }}"
+               data-email="{{ supplier.email or '' }}"
+               data-assistant-name="{{ supplier.assistant_name or '' }}"
+               data-assistant-email="{{ supplier.assistant_email or '' }}"
+               data-fax="{{ supplier.fax_number or '' }}"
+               data-notes="{{ supplier.notes or '' }}">
+            <div class="flex items-center justify-between">
+              <p class="font-semibold">{{ supplier.name }}</p>
+              <span class="text-xs text-slate-500">ID {{ supplier.id }}</span>
+            </div>
+            <p class="text-xs text-slate-500">担当者: {{ supplier.contact_person or '-' }} / 電話: {{ supplier.phone_number or '-' }}</p>
+            <p class="text-xs text-slate-500">メール: {{ supplier.email or '-' }}</p>
+            <p class="text-xs text-slate-500">アシスタント: {{ supplier.assistant_name or '-' }} / {{ supplier.assistant_email or '-' }}</p>
+          </div>
+          {% endfor %}
+        </div>
+      </article>
+    </section>
+  </main>
+
+  <div id="global-loading" class="hidden fixed inset-0 z-[70] items-center justify-center bg-slate-900/40">
+    <div class="rounded-2xl bg-white px-6 py-5 shadow-2xl border border-slate-200 min-w-[260px]">
+      <div class="flex items-center gap-3">
+        <div class="h-6 w-6 rounded-full border-2 border-slate-200 border-t-blue-600 animate-spin"></div>
+        <div>
+          <p class="text-sm font-semibold text-slate-800">処理中</p>
+          <p id="global-loading-message" class="text-xs text-slate-500">しばらくお待ちください...</p>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div id="toast-container" class="pointer-events-none fixed right-4 top-4 z-[80] flex w-[340px] max-w-[calc(100vw-2rem)] flex-col gap-2"></div>
+
+  <script>
+    document.addEventListener('DOMContentLoaded', function () {
+      const supplierForm = document.getElementById('supplier-form');
+      const supplierIdInput = document.getElementById('supplier-id');
+      const supplierNameInput = document.getElementById('supplier-name');
+      const supplierContactInput = document.getElementById('supplier-contact');
+      const supplierMobileInput = document.getElementById('supplier-mobile');
+      const supplierPhoneInput = document.getElementById('supplier-phone');
+      const supplierEmailInput = document.getElementById('supplier-email');
+      const supplierFaxInput = document.getElementById('supplier-fax');
+      const supplierAssistantNameInput = document.getElementById('supplier-assistant-name');
+      const supplierAssistantEmailInput = document.getElementById('supplier-assistant-email');
+      const supplierNotesInput = document.getElementById('supplier-notes');
+      const supplierReset = document.getElementById('supplier-form-reset');
+      const supplierSearch = document.getElementById('supplier-search');
+      const supplierRows = Array.from(document.querySelectorAll('.supplier-row'));
+      const loadingOverlay = document.getElementById('global-loading');
+      const loadingMessage = document.getElementById('global-loading-message');
+      const toastContainer = document.getElementById('toast-container');
+      const MIN_LOADING_VISIBLE_MS = 450;
+      const FLASH_TOAST_KEY = 'pms_flash_toast_manage_suppliers';
+      let loadingStartedAt = 0;
+
+      const setLoading = (isLoading, message = 'しばらくお待ちください...') => {
+        if (!loadingOverlay || !loadingMessage) return;
+        if (isLoading) {
+          loadingStartedAt = Date.now();
+          loadingMessage.textContent = message;
+          loadingOverlay.classList.remove('hidden');
+          loadingOverlay.classList.add('flex');
+          return;
+        }
+        const elapsed = Date.now() - loadingStartedAt;
+        const waitMs = Math.max(0, MIN_LOADING_VISIBLE_MS - elapsed);
+        setTimeout(() => {
+          loadingOverlay.classList.add('hidden');
+          loadingOverlay.classList.remove('flex');
+        }, waitMs);
+      };
+
+      const showToast = (message, kind = 'info') => {
+        if (!toastContainer) return;
+        const toneClass = {
+          success: 'border-emerald-200 bg-emerald-50 text-emerald-800',
+          error: 'border-rose-200 bg-rose-50 text-rose-800',
+          info: 'border-slate-200 bg-white text-slate-800',
+        };
+        const toast = document.createElement('div');
+        toast.className = `pointer-events-auto rounded-xl border px-3 py-2 shadow-sm transition-opacity ${toneClass[kind] || toneClass.info}`;
+        toast.innerHTML = `<p class="text-sm font-semibold">${message}</p>`;
+        toastContainer.appendChild(toast);
+        setTimeout(() => {
+          toast.classList.add('opacity-0');
+          setTimeout(() => toast.remove(), 200);
+        }, 2800);
+      };
+
+      const consumeFlashToast = () => {
+        try {
+          const raw = sessionStorage.getItem(FLASH_TOAST_KEY);
+          if (!raw) return;
+          sessionStorage.removeItem(FLASH_TOAST_KEY);
+          const payload = JSON.parse(raw);
+          const message = String(payload?.message || '').trim();
+          const kind = String(payload?.kind || 'info');
+          if (message) showToast(message, kind);
+        } catch {
+          sessionStorage.removeItem(FLASH_TOAST_KEY);
+        }
+      };
+
+      const reloadWithToast = (message, kind = 'success', delayMs = 120) => {
+        try {
+          sessionStorage.setItem(
+            FLASH_TOAST_KEY,
+            JSON.stringify({ message: String(message || ''), kind, at: Date.now() }),
+          );
+        } catch {}
+        setTimeout(() => location.reload(), delayMs);
+      };
+
+      consumeFlashToast();
+
+      const resetForm = () => {
+        supplierIdInput.value = '';
+        supplierNameInput.value = '';
+        supplierContactInput.value = '';
+        supplierMobileInput.value = '';
+        supplierPhoneInput.value = '';
+        supplierEmailInput.value = '';
+        supplierFaxInput.value = '';
+        supplierAssistantNameInput.value = '';
+        supplierAssistantEmailInput.value = '';
+        supplierNotesInput.value = '';
+      };
+
+      const bindRows = () => {
+        supplierRows.forEach((row) => {
+          row.addEventListener('click', () => {
+            supplierIdInput.value = row.dataset.id || '';
+            supplierNameInput.value = row.dataset.name || '';
+            supplierContactInput.value = row.dataset.contact || '';
+            supplierMobileInput.value = row.dataset.mobile || '';
+            supplierPhoneInput.value = row.dataset.phone || '';
+            supplierEmailInput.value = row.dataset.email || '';
+            supplierFaxInput.value = row.dataset.fax || '';
+            supplierAssistantNameInput.value = row.dataset.assistantName || '';
+            supplierAssistantEmailInput.value = row.dataset.assistantEmail || '';
+            supplierNotesInput.value = row.dataset.notes || '';
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          });
+        });
+      };
+
+      supplierSearch?.addEventListener('input', (event) => {
+        const query = (event.target.value || '').trim().toLowerCase();
+        supplierRows.forEach((row) => {
+          const name = (row.dataset.name || '').toLowerCase();
+          row.style.display = query && !name.includes(query) ? 'none' : '';
+        });
+      });
+
+      supplierForm?.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const payload = {
+          name: supplierNameInput.value.trim(),
+          contact_person: supplierContactInput.value.trim(),
+          mobile_number: supplierMobileInput.value.trim(),
+          phone_number: supplierPhoneInput.value.trim(),
+          email: supplierEmailInput.value.trim(),
+          fax_number: supplierFaxInput.value.trim(),
+          assistant_name: supplierAssistantNameInput.value.trim(),
+          assistant_email: supplierAssistantEmailInput.value.trim(),
+          notes: supplierNotesInput.value.trim(),
+        };
+        if (!payload.name) {
+          showToast('仕入先名は必須です。', 'error');
+          return;
+        }
+        const id = supplierIdInput.value.trim();
+        const url = id ? `/api/suppliers/${id}` : '/api/suppliers';
+        const method = id ? 'PUT' : 'POST';
+        try {
+          setLoading(true, id ? '仕入先を更新しています...' : '仕入先を追加しています...');
+          const response = await fetch(url, {
+            method,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          const result = await response.json().catch(() => ({}));
+          if (!response.ok) {
+            throw new Error(result.detail || '保存に失敗しました。');
+          }
+          resetForm();
+          reloadWithToast(id ? '仕入先を更新しました。' : '仕入先を追加しました。', 'success');
+        } catch (error) {
+          showToast(error.message || String(error), 'error');
+        } finally {
+          setLoading(false);
+        }
+      });
+
+      supplierReset?.addEventListener('click', resetForm);
+      bindRows();
+    });
+  </script>
+</body>
+</html>

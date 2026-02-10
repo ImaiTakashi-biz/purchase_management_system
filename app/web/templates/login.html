@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ログイン</title>
+  <script src="https://cdn.tailwindcss.com?plugins=forms"></script>
+</head>
+<body class="min-h-screen bg-slate-100 text-slate-900">
+  <main class="mx-auto flex min-h-screen max-w-md items-center px-4">
+    <section class="w-full rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+      <div class="mb-5">
+        <p class="text-xs uppercase tracking-[0.3em] text-slate-500">Purchase Management</p>
+        <h1 class="mt-2 text-2xl font-bold">ログイン</h1>
+      </div>
+      {% if error %}
+      <div class="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{{ error }}</div>
+      {% endif %}
+      <form method="post" action="/login" class="space-y-4">
+        <input type="hidden" name="next_path" value="{{ next_path }}" />
+        <label class="block text-sm">
+          <span class="mb-1 block text-slate-600">ユーザー名</span>
+          <input name="username" type="text" autocomplete="username" class="w-full rounded-xl border border-slate-300 px-3 py-2" required />
+        </label>
+        <label class="block text-sm">
+          <span class="mb-1 block text-slate-600">パスワード</span>
+          <input name="password" type="password" autocomplete="current-password" class="w-full rounded-xl border border-slate-300 px-3 py-2" required />
+        </label>
+        <button type="submit" class="w-full rounded-xl bg-blue-600 px-4 py-2 font-semibold text-white hover:bg-blue-700">ログイン</button>
+      </form>
+    </section>
+  </main>
+</body>
+</html>
