@@ -45,7 +45,7 @@
     <div class="border-t border-slate-100">
       <div class="mx-auto flex max-w-screen-xl flex-wrap items-center gap-4 px-4 py-2 text-xs uppercase tracking-[0.3em]">
         {% for link in nav_links %}
-        <a href="{{ link.href }}" class="py-2 {% if link.active %}border-b-2 border-primary text-primary{% else %}text-slate-500 hover:text-slate-900{% endif %}">
+        <a href="{{ link.href }}" class="py-2 {% if link.right %}ml-auto {% endif %}{% if link.active %}border-b-2 border-primary text-primary{% else %}text-slate-500 hover:text-slate-900{% endif %}">
           {{ link.label }}
         </a>
         {% endfor %}
@@ -74,7 +74,9 @@
             <p class="text-xs uppercase tracking-[0.3em] text-slate-500">Order Assist</p>
             <h2 class="text-lg font-semibold text-slate-900">要発注品目</h2>
           </div>
+          {% if current_user and current_user.get('role') in ['manager', 'admin'] %}
           <a href="/orders" class="rounded-xl border border-primary px-3 py-1 text-xs font-semibold text-primary hover:bg-primary/10">発注管理を開く</a>
+          {% endif %}
         </div>
         <div class="mt-4 overflow-x-auto rounded-xl border border-slate-200">
           <table class="min-w-full text-sm">
@@ -133,8 +135,10 @@
           {% endfor %}
         </div>
         <div class="mt-4 grid gap-2">
+          {% if current_user and current_user.get('role') in ['manager', 'admin'] %}
           <a href="/orders" class="rounded-xl bg-primary px-3 py-2 text-center text-sm font-semibold text-white hover:bg-primary-dark">発注管理へ</a>
           <a href="/logistics" class="rounded-xl border border-slate-300 px-3 py-2 text-center text-sm font-semibold text-slate-700 hover:bg-slate-50">入出荷管理へ</a>
+          {% endif %}
         </div>
       </article>
     </section>

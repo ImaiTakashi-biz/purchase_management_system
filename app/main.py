@@ -1,4 +1,4 @@
-﻿import re
+import re
 import json
 import os
 import hmac
@@ -55,6 +55,11 @@ ROLE_ADMIN = UserRole.ADMIN.value
 ROLE_MANAGER = UserRole.MANAGER.value
 ROLE_VIEWER = UserRole.VIEWER.value
 SESSION_SECRET = os.getenv("APP_SESSION_SECRET", "purchase-management-dev-secret")
+# セッションCookieの有効期限（秒）。0=ブラウザ終了まで。例: 1209600=14日間（同一端末でログイン状態を保持）
+_session_max_age_raw = os.getenv("APP_SESSION_MAX_AGE", "1209600").strip()
+SESSION_MAX_AGE = int(_session_max_age_raw) if _session_max_age_raw else 1209600
+# SessionMiddleware に渡す値。0のときはセッションのみ（None）、それ以外は秒数
+SESSION_COOKIE_MAX_AGE: Optional[int] = None if SESSION_MAX_AGE == 0 else SESSION_MAX_AGE
 BOOTSTRAP_ADMIN_USERNAME = os.getenv("APP_BOOTSTRAP_ADMIN_USERNAME", "admin")
 BOOTSTRAP_ADMIN_PASSWORD = os.getenv("APP_BOOTSTRAP_ADMIN_PASSWORD", "admin12345")
 BOOTSTRAP_ADMIN_DISPLAY_NAME = os.getenv("APP_BOOTSTRAP_ADMIN_DISPLAY_NAME", "管理者")
@@ -64,6 +69,19 @@ AUTH_EXEMPT_PATHS: Set[str] = {
     "/logout",
     "/internal/docs",
     "/internal/openapi.json",
+}
+# 一般ユーザー向け：ログイン不要で利用可能なパス
+# - ダッシュボード・在庫一覧・履歴ページ
+# - 在庫一覧から利用する API（recent-transactions / 出庫 / inline-adjust）
+PUBLIC_PATHS: Set[str] = {
+    "/",
+    "/dashboard",
+    "/inventory",
+    "/history",
+    "/recent-transactions",
+    "/inventory/issues",
+    "/inventory/inline-adjust",
+    "/api/inventory/issues",
 }
 AUTH_EXEMPT_PREFIXES: Tuple[str, ...] = ("/static", "/internal/docs")
 API_AUTH_PREFIXES: Tuple[str, ...] = (
@@ -148,6 +166,11 @@ def _is_auth_exempt_path(path: str) -> bool:
     return any(path.startswith(prefix) for prefix in AUTH_EXEMPT_PREFIXES)
 
 
+def _is_public_path(path: str) -> bool:
+    """一般ユーザー向けの公開パスか（ログイン不要でアクセス可能）。"""
+    return path in PUBLIC_PATHS
+
+
 def _is_api_auth_path(path: str) -> bool:
     return any(path.startswith(prefix) for prefix in API_AUTH_PREFIXES)
 
@@ -190,6 +213,16 @@ def get_request_user(request: Request) -> Dict[str, Any]:
     if not isinstance(user, dict):
         raise HTTPException(status_code=401, detail="ログインが必要です。")
     return user
+
+
+def get_optional_user(request: Request) -> Optional[Dict[str, Any]]:
+    """ログインしていればユーザー情報を返し、未ログインなら None を返す。公開パス用。"""
+    user = getattr(request.state, "current_user", None)
+    if not isinstance(user, dict):
+        user = load_user_context_from_session(request)
+        if user:
+            request.state.current_user = user
+    return user if isinstance(user, dict) else None
 
 
 def require_role(request: Request, minimum_role: str) -> Dict[str, Any]:
@@ -715,13 +748,52 @@ BASE_NAV_LINKS = [
 
 
 def build_nav_links(active_href: str, current_user: Optional[Dict[str, Any]] = None) -> List[Dict[str, object]]:
+    """画面上部のナビゲーションリンク一覧を構築する。
+
+    - 左側: 共通メニュー（ダッシュボード、在庫管理、発注管理など）
+    - 右側: 管理者ログイン / ログアウト
+      - 管理者ログインは常に表示（管理者・担当者がここからログインできるようにする）
+      - ログアウトはログイン済みの場合のみ表示
+    """
     links: List[Dict[str, object]] = []
     for link in BASE_NAV_LINKS:
         if link["href"] == "/manage/suppliers" and not is_manager_or_higher_user(current_user):
+            # データ管理は manager 以上のみ表示
             continue
-        links.append({'label': link['label'], 'href': link['href'], 'active': link['href'] == active_href})
+        if link["href"] in ("/orders", "/logistics") and not is_manager_or_higher_user(current_user):
+            # 発注管理・入出荷管理は manager 以上のみ表示（一般ユーザーには非表示）
+            continue
+        links.append(
+            {
+                "label": link["label"],
+                "href": link["href"],
+                "active": link["href"] == active_href,
+                "right": False,
+            }
+        )
+
+    # 右側ナビゲーション（管理者ログイン／ログアウト）
+    # 管理者ログインリンクは常に表示し、管理者や担当者がここからログインできるようにする
+    links.append(
+        {
+            "label": "管理者ログイン",
+            "href": LOGIN_ROUTE_PATH,
+            "active": active_href == LOGIN_ROUTE_PATH,
+            "right": True,  # 最初の右側リンクとして右寄せ用クラスを付与する
+        }
+    )
+
+    # ログイン済みの場合のみログアウトを表示（管理者ログインの右側）
     if current_user:
-        links.append({'label': 'ログアウト', 'href': '/logout', 'active': False})
+        links.append(
+            {
+                "label": "ログアウト",
+                "href": "/logout",
+                "active": False,
+                "right": False,
+            }
+        )
+
     return links
 
 DELIVERIES_TODAY = 4
@@ -749,6 +821,8 @@ app.mount('/static', StaticFiles(directory=STATIC_DIR), name='static')
 
 
 class AuthContextMiddleware:
+    """認証コンテキストを付与し、要認証パスでは未ログイン時はログインへリダイレクトする。"""
+
     def __init__(self, app: Any) -> None:
         self.app = app
 
@@ -759,6 +833,8 @@ class AuthContextMiddleware:
 
         request = Request(scope, receive=receive)
         path = request.url.path
+
+        # 認証完全免除（ログイン画面・ログアウト・静的・API docs）
         if _is_auth_exempt_path(path):
             user = load_user_context_from_session(request)
             if user:
@@ -766,6 +842,15 @@ class AuthContextMiddleware:
             await self.app(scope, receive, send)
             return
 
+        # 一般ユーザー向け公開パス（ダッシュボード・在庫一覧など）はログイン不要
+        if _is_public_path(path):
+            user = load_user_context_from_session(request)
+            if user:
+                scope.setdefault("state", {})["current_user"] = user
+            await self.app(scope, receive, send)
+            return
+
+        # 上記以外はログイン必須
         user = load_user_context_from_session(request)
         if not user:
             if _is_api_auth_path(path):
@@ -784,7 +869,13 @@ class AuthContextMiddleware:
 
 
 app.add_middleware(AuthContextMiddleware)
-app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET, same_site="lax")
+# max_age: セッションCookieの有効期限。None=ブラウザ終了まで。>0で同一端末でログイン状態を保持（例: 14日）
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=SESSION_SECRET,
+    same_site="lax",
+    max_age=SESSION_COOKIE_MAX_AGE,
+)
 
 
 @app.get(LOGIN_ROUTE_PATH, response_class=HTMLResponse, include_in_schema=False)
@@ -1233,9 +1324,9 @@ def load_recent_adjustment_transactions(db: Session, limit: int = 20) -> List[Di
 def recent_transactions(
     db: Session = Depends(get_db),
     limit: int = Query(4, ge=1, le=20),
-    current_user: Dict[str, Any] = Depends(require_viewer_user),
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_user),
 ) -> Dict[str, List[Dict[str, str]]]:
-    _ = current_user
+    """直近トランザクション。未ログインでも取得可能（一般ユーザー向けダッシュボード・在庫で利用）。"""
     transactions = load_recent_transactions(db, limit)
     if not transactions:
         transactions = RECENT_TRANSACTIONS
@@ -1316,7 +1407,7 @@ def root() -> RedirectResponse:
 def dashboard_page(
     request: Request,
     db: Session = Depends(get_db),
-    current_user: Dict[str, Any] = Depends(require_viewer_user),
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_user),
 ) -> HTMLResponse:
     snapshots = load_inventory_snapshots(db)
     if not snapshots:
@@ -1438,7 +1529,7 @@ def inventory_index(
     department: str = Query('', alias='department'),
     message: str = Query('', alias='message'),
     db: Session = Depends(get_db),
-    current_user: Dict[str, Any] = Depends(require_viewer_user),
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_user),
 ) -> HTMLResponse:
     keyword = q.strip()
     selected_category = normalize_field(category)
@@ -1619,7 +1710,7 @@ def inventory_issue(
     created_by: str = Form(""),
     next_url: str = Form("/inventory"),
     db: Session = Depends(get_db),
-    current_user: Dict[str, Any] = Depends(require_viewer_user),
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_user),
 ) -> RedirectResponse:
     if quantity <= 0:
         raise HTTPException(status_code=400, detail="出庫数は1以上で指定してください。")
@@ -1633,6 +1724,9 @@ def inventory_issue(
         raise HTTPException(status_code=400, detail="在庫数が不足しています。")
 
     inventory_item.quantity_on_hand -= quantity
+    created_by_value = created_by or (
+        str(current_user.get("username") or "system") if current_user else "system"
+    )
     tx = InventoryTransaction(
         item_id=item.id,
         tx_type=TransactionType.ISSUE,
@@ -1640,7 +1734,7 @@ def inventory_issue(
         reason=reason or "",
         note="",
         occurred_at=datetime.now(JST_ZONE),
-        created_by=created_by or str(current_user.get("username") or "system"),
+        created_by=created_by_value,
     )
     db.add(tx)
     db.commit()
@@ -1686,7 +1780,7 @@ def api_inventory_receipt(
 def api_inventory_issue(
     payload: IssueRecordRequest,
     db: Session = Depends(get_db),
-    current_user: Dict[str, Any] = Depends(require_viewer_user),
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_user),
 ) -> IssueRecordResponse:
     if payload.quantity <= 0:
         raise HTTPException(status_code=400, detail="数量は1以上で指定してください。")
@@ -1700,6 +1794,7 @@ def api_inventory_issue(
         raise HTTPException(status_code=400, detail="在庫数が不足しています。")
 
     inventory_item.quantity_on_hand -= payload.quantity
+    created_by_value = str(current_user.get("username") or "system") if current_user else "system"
     tx = InventoryTransaction(
         item_id=item.id,
         tx_type=TransactionType.ISSUE,
@@ -1707,7 +1802,7 @@ def api_inventory_issue(
         reason=payload.reason or "",
         note="",
         occurred_at=datetime.now(JST_ZONE),
-        created_by=str(current_user.get("username") or "system"),
+        created_by=created_by_value,
     )
     db.add(tx)
     db.commit()
@@ -1794,9 +1889,8 @@ def inventory_adjust(
 def inventory_inline_adjust(
     payload: InlineAdjustmentPayload,
     db: Session = Depends(get_db),
-    current_user: Dict[str, Any] = Depends(require_manager_user),
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_user),
 ) -> Dict[str, object]:
-    _ = current_user
     if payload.target_quantity < 0:
         raise HTTPException(status_code=400, detail="在庫数量は0以上で指定してください。")
     item = db.scalar(select(Item).filter(Item.item_code == payload.item_code))
@@ -2247,7 +2341,7 @@ def update_purchase_order_status(
 def history_page(
     request: Request,
     db: Session = Depends(get_db),
-    current_user: Dict[str, Any] = Depends(require_viewer_user),
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_user),
 ) -> HTMLResponse:
     transactions = load_recent_transactions(db, limit=50)
     if not transactions:

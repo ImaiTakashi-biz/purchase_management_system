@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="ja">
 <head>
   <meta charset="utf-8" />
@@ -37,7 +37,7 @@
     <div class="border-t border-slate-100">
       <div class="mx-auto flex max-w-screen-xl flex-wrap items-center gap-4 px-4 py-2 text-xs uppercase tracking-[0.3em]">
         {% for link in nav_links %}
-        <a href="{{ link.href }}" class="py-2 {% if link.active %}border-b-2 border-primary text-primary{% else %}text-slate-500 hover:text-slate-900{% endif %}">{{ link.label }}</a>
+        <a href="{{ link.href }}" class="py-2 {% if link.right %}ml-auto {% endif %}{% if link.active %}border-b-2 border-primary text-primary{% else %}text-slate-500 hover:text-slate-900{% endif %}">{{ link.label }}</a>
         {% endfor %}
       </div>
     </div>

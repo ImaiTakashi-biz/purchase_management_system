@@ -45,7 +45,7 @@
     <div class="border-t border-slate-100">
       <div class="max-w-screen-xl mx-auto flex flex-wrap items-center gap-4 px-4 py-2 text-xs uppercase tracking-[0.3em]">
         {% for link in nav_links %}
-        <a href="{{ link.href }}" class="py-2 {% if link.active %}text-primary border-b-2 border-primary{% else %}text-slate-500 hover:text-slate-900{% endif %}">
+        <a href="{{ link.href }}" class="py-2 {% if link.right %}ml-auto {% endif %}{% if link.active %}text-primary border-b-2 border-primary{% else %}text-slate-500 hover:text-slate-900{% endif %}">
           {{ link.label }}
         </a>
         {% endfor %}
