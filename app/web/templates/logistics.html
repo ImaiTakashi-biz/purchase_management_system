@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>入出荷管理</title>
+  <title>入出庫管理</title>
   <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet" />
   <script src="https://cdn.tailwindcss.com?plugins=forms"></script>
   <script id="tailwind-config">
@@ -30,7 +30,7 @@
     <div class="mx-auto flex max-w-screen-xl flex-col gap-3 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
       <div>
         <p class="text-xs uppercase tracking-[0.3em] text-slate-500">購入品一元管理</p>
-        <p class="text-2xl font-bold">入出荷管理</p>
+        <p class="text-2xl font-bold">入出庫管理</p>
       </div>
       <div class="text-xs text-slate-500">更新: {{ now.strftime('%Y/%m/%d %H:%M') }}</div>
     </div>
@@ -89,7 +89,7 @@
               <td class="px-3 py-3 text-left">{{ order.supplier_name }}</td>
               <td class="px-3 py-3 text-left">{{ order.ordered_by_user or '-' }}</td>
               <td class="px-3 py-3 text-left">
-                <span class="inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold {% if order.status == 'WAITING' %}border-amber-200 bg-amber-50 text-amber-700{% else %}border-indigo-200 bg-indigo-50 text-indigo-700{% endif %}">{{ order.status }}</span>
+                <span class="inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold {% if order.status == 'WAITING' %}border-amber-200 bg-amber-50 text-amber-700{% else %}border-indigo-200 bg-indigo-50 text-indigo-700{% endif %}">{{ order.status | status_ja }}</span>
               </td>
               <td class="px-3 py-3 text-right">{{ order.line_count }}</td>
               <td class="px-3 py-3 text-right">{{ order.total_quantity }}</td>
@@ -166,12 +166,10 @@
         </div>
         <label class="flex flex-col gap-1 text-sm">
           <span class="text-xs text-slate-500">品目</span>
-          <select id="adjust-item-code" class="rounded-xl border border-slate-200 px-3 py-2">
-            <option value="">選択してください</option>
-            {% for item in item_options %}
-            <option value="{{ item.item_code }}">{{ item.item_code }} - {{ item.name }} (在庫: {{ item.on_hand }}{{ item.unit }})</option>
-            {% endfor %}
-          </select>
+          <div class="relative" id="adjust-item-wrap">
+            <input type="text" id="adjust-item-code" class="w-full rounded-xl border border-slate-200 px-3 py-2" placeholder="品番または品名で検索..." autocomplete="off" />
+            <div id="adjust-item-suggestions" class="absolute left-0 right-0 top-full z-10 mt-1 hidden max-h-60 overflow-auto rounded-xl border border-slate-200 bg-white shadow-lg" role="listbox"></div>
+          </div>
         </label>
         <label class="flex flex-col gap-1 text-sm">
           <span class="text-xs text-slate-500">調整数（増減）</span>
@@ -257,6 +255,7 @@
   </div>
 
   <script>
+    window.ITEM_OPTIONS = {{ item_options_json | safe }};
     document.addEventListener('DOMContentLoaded', function () {
       const loadingOverlay = document.getElementById('global-loading');
       const loadingMessage = document.getElementById('global-loading-message');
@@ -267,9 +266,67 @@
       const confirmModalCancel = document.getElementById('confirm-modal-cancel');
       const confirmModalBackdrop = document.getElementById('confirm-modal-backdrop');
       const adjustItem = document.getElementById('adjust-item-code');
+      const adjustItemWrap = document.getElementById('adjust-item-wrap');
+      const adjustSuggestions = document.getElementById('adjust-item-suggestions');
       const adjustDelta = document.getElementById('adjust-delta');
       const adjustReason = document.getElementById('adjust-reason');
       const adjustButton = document.getElementById('submit-adjustment');
+      const itemOptions = Array.isArray(window.ITEM_OPTIONS) ? window.ITEM_OPTIONS : [];
+      const MAX_SUGGESTIONS = 30;
+      let adjustSuggestionsBlurTimer = null;
+
+      function filterItemSuggestions(query) {
+        const q = (query || '').trim().toLowerCase();
+        if (!q) return itemOptions.slice(0, MAX_SUGGESTIONS);
+        return itemOptions.filter(function (it) {
+          const code = (it.item_code || '').toLowerCase();
+          const name = (it.name || '').toLowerCase();
+          return code.indexOf(q) !== -1 || name.indexOf(q) !== -1;
+        }).slice(0, MAX_SUGGESTIONS);
+      }
+
+      function renderItemSuggestions(items) {
+        if (!adjustSuggestions) return;
+        adjustSuggestions.innerHTML = '';
+        adjustSuggestions.classList.add('hidden');
+        if (items.length === 0) return;
+        items.forEach(function (it) {
+          const label = (it.item_code || '') + ' - ' + (it.name || '') + ' (在庫: ' + (it.on_hand ?? '') + (it.unit || '') + ')';
+          const div = document.createElement('div');
+          div.className = 'cursor-pointer px-3 py-2 text-sm text-slate-700 hover:bg-slate-100 border-b border-slate-100 last:border-b-0';
+          div.setAttribute('role', 'option');
+          div.dataset.itemCode = it.item_code || '';
+          div.dataset.label = label;
+          div.textContent = label;
+          div.addEventListener('click', function () {
+            if (adjustItem) {
+              adjustItem.value = label;
+              adjustItem.dataset.itemCode = div.dataset.itemCode;
+            }
+            adjustSuggestions.classList.add('hidden');
+            adjustSuggestions.innerHTML = '';
+          });
+          adjustSuggestions.appendChild(div);
+        });
+        adjustSuggestions.classList.remove('hidden');
+      }
+
+      if (adjustItem && adjustSuggestions) {
+        adjustItem.addEventListener('focus', function () {
+          clearTimeout(adjustSuggestionsBlurTimer);
+          renderItemSuggestions(filterItemSuggestions(adjustItem.value));
+        });
+        adjustItem.addEventListener('input', function () {
+          adjustItem.removeAttribute('data-item-code');
+          renderItemSuggestions(filterItemSuggestions(adjustItem.value));
+        });
+        adjustItem.addEventListener('blur', function () {
+          adjustSuggestionsBlurTimer = setTimeout(function () {
+            adjustSuggestions.classList.add('hidden');
+            adjustSuggestions.innerHTML = '';
+          }, 200);
+        });
+      }
       const MIN_LOADING_VISIBLE_MS = 450;
       const FLASH_TOAST_KEY = 'pms_flash_toast_logistics';
       let loadingStartedAt = 0;
@@ -429,11 +486,12 @@
 
       adjustButton?.addEventListener('click', async () => {
         try {
-          const itemCode = String(adjustItem?.value || '').trim();
+          const raw = String(adjustItem?.value || '').trim();
+          const itemCode = (adjustItem?.dataset?.itemCode || raw.split(' - ')[0] || raw).trim();
           const delta = Number(adjustDelta?.value || 0);
           const reason = String(adjustReason?.value || '').trim();
           if (!itemCode) {
-            throw new Error('品目を選択してください。');
+            throw new Error('品目を選択または入力してください。');
           }
           if (!Number.isFinite(delta) || delta === 0) {
             throw new Error('調整数は0以外で入力してください。');

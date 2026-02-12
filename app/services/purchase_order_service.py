@@ -1,5 +1,6 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
+import html
 import json
 import os
 import re
@@ -8,6 +9,7 @@ import smtplib
 import tempfile
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -33,8 +35,26 @@ from app.models.tables import (
 
 DEFAULT_NAS_ROOT = r"\\192.168.1.200\共有\dev_tools\発注管理システム\注文書"
 SMTP_KEYRING_SERVICE_NAME = "purchase_order_app"
+JST_ZONE = ZoneInfo("Asia/Tokyo")
 DEFAULT_DUPLICATE_WINDOW_SECONDS = 120
 INVALID_WINDOWS_SEGMENT_CHARS = re.compile(r"[\\/:*?\"<>|]")
+
+# 備考欄のURLをクリック可能なリンクに変換（注文書PDF用）
+def _note_to_html_with_links(note: str) -> str:
+    if not (note or "").strip():
+        return ""
+    pattern = re.compile(r"(https?://[^\s<>\"']+)")
+    parts = pattern.split(note)
+    result = []
+    for part in parts:
+        if pattern.match(part):
+            escaped = html.escape(part)
+            result.append(f'<a href="{escaped}">{escaped}</a>')
+        else:
+            result.append(html.escape(part))
+    return "".join(result)
+
+
 WINDOWS_RESERVED_NAMES = {
     "CON",
     "PRN",
@@ -94,6 +114,22 @@ class PurchaseOrderService:
 
     def build_low_stock_candidates(self, department: str = "") -> list[dict[str, Any]]:
         selected_department = (department or "").strip()
+        # 確定以降（CONFIRMED/SENT/WAITING/RECEIVED）の発注に含まれる品目は候補から除外する。取消時は再表示される。
+        confirmed_or_later = (
+            PurchaseOrderStatus.CONFIRMED.value,
+            PurchaseOrderStatus.SENT.value,
+            PurchaseOrderStatus.WAITING.value,
+            PurchaseOrderStatus.RECEIVED.value,
+        )
+        excluded_item_ids_stmt = (
+            select(PurchaseOrderLine.item_id)
+            .join(PurchaseOrder, PurchaseOrder.id == PurchaseOrderLine.purchase_order_id)
+            .where(PurchaseOrder.status.in_(confirmed_or_later))
+            .where(PurchaseOrderLine.item_id.isnot(None))
+            .distinct()
+        )
+        excluded_item_ids = set(self.db.scalars(excluded_item_ids_stmt).all())
+
         stmt = (
             select(Item)
             .options(selectinload(Item.inventory_item), selectinload(Item.supplier))
@@ -103,6 +139,8 @@ class PurchaseOrderService:
 
         results: list[dict[str, Any]] = []
         for item in items:
+            if item.id in excluded_item_ids:
+                continue
             inv = item.inventory_item
             on_hand = inv.quantity_on_hand if inv else 0
             reorder = item.reorder_point or 0
@@ -128,7 +166,7 @@ class PurchaseOrderService:
                     "reorder_point": reorder,
                     "gap": on_hand - reorder,
                     "gap_label": f"{on_hand - reorder:+d}",
-                    "order_quantity": max(1, reorder - on_hand),
+                    "order_quantity": max(1, getattr(item, "default_order_quantity", 1) or 1),
                     "note": "",
                 }
             )
@@ -302,6 +340,7 @@ class PurchaseOrderService:
         self,
         ordered_by_user: str,
         department: str = "",
+        candidate_overrides: dict[str, dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         candidates = self.build_low_stock_candidates(department)
         grouped: dict[int, list[dict[str, Any]]] = {}
@@ -311,20 +350,31 @@ class PurchaseOrderService:
                 continue
             grouped.setdefault(int(supplier_id), []).append(row)
 
+        overrides = candidate_overrides or {}
         created_orders: list[int] = []
         created_count = 0
         reused_count = 0
         for _, rows in grouped.items():
             if not rows:
                 continue
-            lines = [
-                {
-                    "item_id": row["item_id"],
-                    "quantity": row["order_quantity"],
-                    "note": row.get("note") or "",
-                }
-                for row in rows
-            ]
+            lines = []
+            for row in rows:
+                item_id = row["item_id"]
+                key = str(item_id)
+                if key in overrides:
+                    o = overrides[key]
+                    qty = int(o.get("quantity") or 0)
+                    note = str(o.get("note") or "").strip()
+                else:
+                    qty = row["order_quantity"]
+                    note = row.get("note") or ""
+                lines.append(
+                    {
+                        "item_id": item_id,
+                        "quantity": max(1, qty),
+                        "note": note,
+                    }
+                )
             result = self.create_order(
                 lines=lines,
                 ordered_by_user=ordered_by_user,
@@ -729,7 +779,7 @@ class PurchaseOrderService:
                         delta=incoming,
                         reason=f"発注#{order.id} 分納入庫",
                         note=f"発注管理 明細#{line.id}",
-                        occurred_at=datetime.utcnow(),
+                        occurred_at=datetime.now(JST_ZONE),
                         created_by=(updated_by or "").strip() or "system",
                     )
                 )
@@ -786,7 +836,7 @@ class PurchaseOrderService:
                     delta=remaining,
                     reason=f"発注#{order.id} 納品計上",
                     note="発注管理",
-                    occurred_at=datetime.utcnow(),
+                    occurred_at=datetime.now(JST_ZONE),
                     created_by=(updated_by or "").strip() or "system",
                 )
             )
@@ -872,6 +922,7 @@ class PurchaseOrderService:
                     "quantity": line.quantity,
                     "reply_due_date": line.vendor_reply_due_date.isoformat() if line.vendor_reply_due_date else "",
                     "note": line.note or "",
+                    "note_html": _note_to_html_with_links(line.note or ""),
                 }
             )
 

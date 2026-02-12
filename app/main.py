@@ -18,11 +18,11 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response, JSONResp
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
-from sqlalchemy import nullsfirst, select, or_
+from sqlalchemy import func, nullsfirst, select, or_
 from sqlalchemy.orm import Session, selectinload
 
 from app.db.session import init_db, get_db, SessionLocal
-from app.models.tables import AppUser, InventoryItem, InventoryTransaction, Item, PurchaseOrderStatus, Supplier, TransactionType, UserRole
+from app.models.tables import AppUser, InventoryItem, InventoryTransaction, Item, PurchaseOrder, PurchaseOrderLine, PurchaseOrderStatus, Supplier, TransactionType, UserRole
 from app.services import PurchaseOrderError, PurchaseOrderService
 from pydantic import BaseModel
 from zoneinfo import ZoneInfo
@@ -319,14 +319,17 @@ class EmailAccountPasswordPayload(BaseModel):
 
 class ItemPayload(BaseModel):
     item_code: str
-    name: Optional[str] = ""  # 譛ｪ蜈･蜉帶凾縺ｯAPI蛛ｴ縺ｧ蜩∫分繝ｻ遞ｮ鬘槭〒陬懷ｮ・    item_type: Optional[str] = ""
+    name: Optional[str] = ""
+    item_type: Optional[str] = ""
     usage: Optional[str] = ""
     department: Optional[str] = ""
     manufacturer: Optional[str] = ""
     shelf: Optional[str] = ""
     unit: Optional[str] = ""
     reorder_point: int = 0
-    management_type: Optional[str] = ""  # 邂｡逅・/ 邂｡逅・､・    supplier_id: Optional[int] = None
+    default_order_quantity: int = 1
+    management_type: Optional[str] = ""  # 管理 / 管理外
+    supplier_id: Optional[int] = None
 
 class IssueRecordRequest(BaseModel):
     item_code: str
@@ -386,6 +389,8 @@ class CreatePurchaseOrderPayload(BaseModel):
 class BulkCreatePurchaseOrdersPayload(BaseModel):
     department: Optional[str] = ""
     ordered_by_user: Optional[str] = ""
+    # 一括作成時に画面で変更した数量・備考を反映するため。key=item_id(str), value={ quantity: int, note: str }
+    candidate_overrides: Optional[Dict[str, Dict[str, Any]]] = None
 
 
 class GenerateDocumentPayload(BaseModel):
@@ -441,6 +446,7 @@ def shelf_sort_key(snapshot: InventorySnapshot) -> Tuple[bool, Tuple, str]:
 
 
 def to_jst(value: Optional[datetime]) -> datetime:
+    """日時を JST に変換する。タイムゾーン未指定の場合は JST として解釈（在庫取引は JST で記録する前提）。"""
     if not value:
         return datetime.now(JST_ZONE)
     if value.tzinfo is None:
@@ -741,7 +747,7 @@ BASE_NAV_LINKS = [
     {'label': 'ダッシュボード', 'href': '/dashboard'},
     {'label': '在庫管理', 'href': '/inventory'},
     {'label': '発注管理', 'href': '/orders'},
-    {'label': '入出荷管理', 'href': '/logistics'},
+    {'label': '入出庫管理', 'href': '/logistics'},
     {'label': 'データ管理', 'href': '/manage/suppliers'},
     {'label': '履歴', 'href': '/history'},
 ]
@@ -761,7 +767,7 @@ def build_nav_links(active_href: str, current_user: Optional[Dict[str, Any]] = N
             # データ管理は manager 以上のみ表示
             continue
         if link["href"] in ("/orders", "/logistics") and not is_manager_or_higher_user(current_user):
-            # 発注管理・入出荷管理は manager 以上のみ表示（一般ユーザーには非表示）
+            # 発注管理・入出庫管理は manager 以上のみ表示（一般ユーザーには非表示）
             continue
         links.append(
             {
@@ -796,7 +802,68 @@ def build_nav_links(active_href: str, current_user: Optional[Dict[str, Any]] = N
 
     return links
 
-DELIVERIES_TODAY = 4
+def count_deliveries_due_today(db: Session) -> int:
+    """本日が回答納期かつ入荷待ちの発注件数を返す（DB実データのみ）。"""
+    today = datetime.now(JST_ZONE).date()
+    subq = (
+        select(PurchaseOrderLine.purchase_order_id)
+        .select_from(PurchaseOrderLine)
+        .join(PurchaseOrder, PurchaseOrder.id == PurchaseOrderLine.purchase_order_id)
+        .where(PurchaseOrderLine.vendor_reply_due_date == today)
+        .where(PurchaseOrder.status.in_([PurchaseOrderStatus.SENT.value, PurchaseOrderStatus.WAITING.value]))
+        .distinct()
+    )
+    count = db.scalar(select(func.count()).select_from(subq.subquery())) or 0
+    return int(count)
+
+
+def load_item_order_status_map(db: Session, item_ids: List[int]) -> Dict[int, Tuple[str, str]]:
+    """
+    品目ごとの発注状況を返す。key=item_id, value=(表示用ステータス, 納期YYYY/MM/DD)。
+    発注依頼済=DRAFT/CONFIRMED、入荷待ち=SENT/WAITING。複数行ある場合は入荷待ちを優先し、納期は最も早い日付。
+    """
+    if not item_ids:
+        return {}
+    open_statuses = [
+        PurchaseOrderStatus.DRAFT.value,
+        PurchaseOrderStatus.CONFIRMED.value,
+        PurchaseOrderStatus.SENT.value,
+        PurchaseOrderStatus.WAITING.value,
+    ]
+    stmt = (
+        select(
+            PurchaseOrderLine.item_id,
+            PurchaseOrder.status,
+            PurchaseOrderLine.vendor_reply_due_date,
+        )
+        .select_from(PurchaseOrderLine)
+        .join(PurchaseOrder, PurchaseOrder.id == PurchaseOrderLine.purchase_order_id)
+        .where(PurchaseOrder.status.in_(open_statuses))
+        .where(PurchaseOrderLine.item_id.in_(item_ids))
+    )
+    rows = db.execute(stmt).all()
+    # item_id -> (is_waiting: bool, earliest_due: date|None)
+    by_item: Dict[int, Tuple[bool, Optional[date]]] = {}
+    for item_id, order_status, due_date in rows:
+        if item_id is None:
+            continue
+        is_waiting = order_status in (PurchaseOrderStatus.SENT.value, PurchaseOrderStatus.WAITING.value)
+        prev = by_item.get(item_id)
+        if prev is None:
+            by_item[item_id] = (is_waiting, due_date)
+        else:
+            prev_waiting, prev_due = prev
+            earliest = prev_due
+            if due_date is not None and (earliest is None or due_date < earliest):
+                earliest = due_date
+            by_item[item_id] = (prev_waiting or is_waiting, earliest)
+    result: Dict[int, Tuple[str, str]] = {}
+    for iid, (is_waiting, due) in by_item.items():
+        status_ja = "入荷待ち" if is_waiting else "発注依頼済"
+        due_str = due.strftime("%Y/%m/%d") if due else ""
+        result[iid] = (status_ja, due_str)
+    return result
+
 
 app = FastAPI(
     title='購入品一元管理システム',
@@ -815,8 +882,23 @@ BASE_DIR = Path(__file__).resolve().parent
 TEMPLATE_DIR = BASE_DIR / 'web' / 'templates'
 STATIC_DIR = BASE_DIR / 'web' / 'static'
 
+# 発注ステータスの日本語表示用（バッジなど）
+PURCHASE_ORDER_STATUS_JA = {
+    PurchaseOrderStatus.DRAFT.value: "下書き",
+    PurchaseOrderStatus.CONFIRMED.value: "確定",
+    PurchaseOrderStatus.SENT.value: "送信済",
+    PurchaseOrderStatus.WAITING.value: "入荷待ち",
+    PurchaseOrderStatus.RECEIVED.value: "納品済",
+    PurchaseOrderStatus.CANCELLED.value: "取消",
+}
+
+def _filter_status_ja(value: str) -> str:
+    """発注ステータスを日本語ラベルに変換するJinjaフィルタ用"""
+    return PURCHASE_ORDER_STATUS_JA.get(str(value), str(value))
+
 templates = Jinja2Templates(directory=TEMPLATE_DIR)
 templates.env.filters['urlencode'] = lambda value: quote_plus(str(value))
+templates.env.filters['status_ja'] = _filter_status_ja
 app.mount('/static', StaticFiles(directory=STATIC_DIR), name='static')
 
 
@@ -962,9 +1044,16 @@ def calculate_status(snapshot: InventorySnapshot) -> Tuple[str, str, str]:
         '在庫は安定しています',
     )
 
-def build_inventory_row(snapshot: InventorySnapshot) -> Dict[str, str]:
+def build_inventory_row(
+    snapshot: InventorySnapshot,
+    order_map: Optional[Dict[int, Tuple[str, str]]] = None,
+) -> Dict[str, Any]:
     label, badge, description = calculate_status(snapshot)
     gap = snapshot.on_hand - snapshot.reorder_point
+    order_status_display = ""
+    order_due_display = ""
+    if order_map and snapshot.item_id in order_map:
+        order_status_display, order_due_display = order_map[snapshot.item_id]
     return {
         'item_code': snapshot.item_code,
         'name': snapshot.name,
@@ -987,6 +1076,8 @@ def build_inventory_row(snapshot: InventorySnapshot) -> Dict[str, str]:
         'status_description': description,
         'stock_gap': gap,
         'stock_gap_label': '{:+,d}'.format(gap),
+        'order_status_display': order_status_display,
+        'order_due_display': order_due_display,
     }
 
 def build_sidebar_structure(snapshots: List[InventorySnapshot]) -> List[Dict[str, List[Dict[str, int]]]]:
@@ -1126,6 +1217,7 @@ def build_inventory_status_payload(
     item: Item,
     inventory_item: InventoryItem,
     last_tx: Optional[InventoryTransaction],
+    db: Optional[Session] = None,
 ) -> Dict[str, object]:
     last_activity, last_updated, last_supplier = describe_transaction(last_tx)
     supplier_label = (
@@ -1151,6 +1243,12 @@ def build_inventory_status_payload(
     )
     status_label, status_badge, status_description = calculate_status(snapshot)
     gap = snapshot.on_hand - snapshot.reorder_point
+    order_status_display = ""
+    order_due_display = ""
+    if db is not None:
+        order_map = load_item_order_status_map(db, [item.id])
+        if item.id in order_map:
+            order_status_display, order_due_display = order_map[item.id]
     return {
         "item_code": item.item_code,
         "on_hand": snapshot.on_hand,
@@ -1162,6 +1260,8 @@ def build_inventory_status_payload(
         "last_activity": last_activity,
         "last_updated": last_updated.strftime('%Y/%m/%d %H:%M'),
         "supplier": supplier_label or "",
+        "order_status_display": order_status_display,
+        "order_due_display": order_due_display,
     }
 
 
@@ -1326,10 +1426,8 @@ def recent_transactions(
     limit: int = Query(4, ge=1, le=20),
     current_user: Optional[Dict[str, Any]] = Depends(get_optional_user),
 ) -> Dict[str, List[Dict[str, str]]]:
-    """直近トランザクション。未ログインでも取得可能（一般ユーザー向けダッシュボード・在庫で利用）。"""
+    """直近トランザクション。未ログインでも取得可能（一般ユーザー向けダッシュボード・在庫で利用）。DBの実データのみ返す。"""
     transactions = load_recent_transactions(db, limit)
-    if not transactions:
-        transactions = RECENT_TRANSACTIONS
     return {"transactions": transactions}
 
 
@@ -1472,8 +1570,6 @@ def dashboard_page(
     )
 
     recent_transactions = load_recent_transactions(db, limit=8)
-    if not recent_transactions:
-        recent_transactions = RECENT_TRANSACTIONS
 
     kpi_cards = [
         {
@@ -1548,11 +1644,13 @@ def inventory_index(
         selected_department,
     )
     filtered_snapshots = sorted(filtered_snapshots, key=shelf_sort_key)
-    rows = [build_inventory_row(snapshot) for snapshot in filtered_snapshots]
+    order_map = load_item_order_status_map(db, [s.item_id for s in filtered_snapshots])
+    rows = [build_inventory_row(snapshot, order_map) for snapshot in filtered_snapshots]
 
     total_items = len(snapshots)
     attention_count = sum(1 for snapshot in snapshots if calculate_status(snapshot)[0] != '正常')
     low_stock_count = sum(1 for snapshot in snapshots if snapshot.on_hand <= snapshot.reorder_point)
+    deliveries_due_today = count_deliveries_due_today(db)
 
     kpi_cards = [
         {
@@ -1575,8 +1673,8 @@ def inventory_index(
         },
         {
             'label': '本日入荷予定',
-            'value': DELIVERIES_TODAY,
-            'note': '表示用サンプル',
+            'value': deliveries_due_today,
+            'note': '本日が回答納期の入荷待ち発注件数',
             'icon': 'local_shipping',
         },
     ]
@@ -1658,6 +1756,7 @@ def logistics_page(
         "nav_links": build_nav_links('/logistics', current_user),
         "kpi_cards": kpi_cards,
         "item_options": item_options,
+        "item_options_json": json.dumps(item_options),
         "pending_orders": pending_orders,
         "recent_adjustments": recent_adjustments,
         "now": datetime.now(JST_ZONE),
@@ -1771,7 +1870,7 @@ def api_inventory_receipt(
     )
     db.add(tx)
     db.commit()
-    response_data = build_inventory_status_payload(item, inventory_item, tx)
+    response_data = build_inventory_status_payload(item, inventory_item, tx, db=db)
     response_data["message"] = f"{item.name} ({item.item_code}) を {payload.quantity} 入庫しました。"
     return IssueRecordResponse(**response_data)
 
@@ -1806,7 +1905,7 @@ def api_inventory_issue(
     )
     db.add(tx)
     db.commit()
-    response_data = build_inventory_status_payload(item, inventory_item, tx)
+    response_data = build_inventory_status_payload(item, inventory_item, tx, db=db)
     response_data["message"] = f"{item.name} ({item.item_code}) を {payload.quantity} 出庫しました。"
     return IssueRecordResponse(**response_data)
 
@@ -1836,13 +1935,13 @@ def api_inventory_adjustment(
         tx_type=TransactionType.ADJUST,
         delta=payload.delta,
         reason=(payload.reason or "").strip() or "在庫調整",
-        note="入出荷管理",
+        note="入出庫管理",
         occurred_at=datetime.now(JST_ZONE),
         created_by=str(current_user.get("username") or "system"),
     )
     db.add(tx)
     db.commit()
-    response_data = build_inventory_status_payload(item, inventory_item, tx)
+    response_data = build_inventory_status_payload(item, inventory_item, tx, db=db)
     response_data["message"] = f"{item.name} ({item.item_code}) を {payload.delta:+d} 調整しました。"
     return IssueRecordResponse(**response_data)
 
@@ -1923,7 +2022,7 @@ def inventory_inline_adjust(
         .limit(1)
     )
     last_tx = db.scalar(last_tx_stmt)
-    return build_inventory_status_payload(item, inventory_item, last_tx)
+    return build_inventory_status_payload(item, inventory_item, last_tx, db=db)
 
 
 def build_manage_sections(current_user: Dict[str, Any], active_key: str) -> List[Dict[str, object]]:
@@ -1951,6 +2050,7 @@ def serialize_items_for_manage(items: List[Item]) -> List[Dict[str, object]]:
             "shelf": item.shelf or "",
             "unit": item.unit or "",
             "reorder_point": item.reorder_point or 0,
+            "default_order_quantity": getattr(item, "default_order_quantity", 1) or 1,
             "management_type": item.management_type or "",
             "supplier_id": item.supplier_id,
             "supplier_name": item.supplier.name if item.supplier else "",
@@ -1985,6 +2085,37 @@ def manage_suppliers(
     return templates.TemplateResponse('manage_suppliers.html', context)
 
 
+def _distinct_item_values(items: List[Item]) -> Dict[str, List[str]]:
+    """仕入品一覧からカテゴリ・用途・部署・メーカー・棚番・品番の既存値リストを重複排除・ソートして返す。"""
+    codes: Set[str] = set()
+    types: Set[str] = set()
+    usages: Set[str] = set()
+    departments: Set[str] = set()
+    manufacturers: Set[str] = set()
+    shelves: Set[str] = set()
+    for item in items:
+        if item.item_code and item.item_code.strip():
+            codes.add(item.item_code.strip())
+        if item.item_type and item.item_type.strip():
+            types.add(item.item_type.strip())
+        if item.usage and item.usage.strip():
+            usages.add(item.usage.strip())
+        if item.department and item.department.strip():
+            departments.add(item.department.strip())
+        if item.manufacturer and item.manufacturer.strip():
+            manufacturers.add(item.manufacturer.strip())
+        if item.shelf and item.shelf.strip():
+            shelves.add(item.shelf.strip())
+    return {
+        "item_codes": sorted(codes),
+        "item_types": sorted(types),
+        "usages": sorted(usages),
+        "departments": sorted(departments),
+        "manufacturers": sorted(manufacturers),
+        "shelves": sorted(shelves),
+    }
+
+
 @app.get('/manage/items', response_class=HTMLResponse)
 def manage_items(
     request: Request,
@@ -1996,12 +2127,19 @@ def manage_items(
         db.scalars(select(Item).options(selectinload(Item.supplier)).order_by(Item.item_code.asc()))
         .all()
     )
+    distinct = _distinct_item_values(items)
     context = {
         'request': request,
         'nav_links': build_nav_links('/manage/suppliers', current_user),
         'manage_sections': build_manage_sections(current_user, 'items'),
         'suppliers': suppliers,
         'items_data': serialize_items_for_manage(items),
+        'distinct_item_codes': distinct["item_codes"],
+        'distinct_item_types': distinct["item_types"],
+        'distinct_usages': distinct["usages"],
+        'distinct_departments': distinct["departments"],
+        'distinct_manufacturers': distinct["manufacturers"],
+        'distinct_shelves': distinct["shelves"],
         'now': datetime.now(JST_ZONE),
         'current_user': current_user,
     }
@@ -2133,9 +2271,18 @@ def orders_page(
     current_user: Dict[str, Any] = Depends(require_manager_user),
 ) -> HTMLResponse:
     selected_department = normalize_field(department)
+    snapshots = load_inventory_snapshots(db)
+    sidebar_structure = build_sidebar_structure(snapshots)
+    # 部署ごとの発注を前提とするため、未選択時は先頭の部署へリダイレクト
+    if not selected_department and sidebar_structure:
+        first_dept = (sidebar_structure[0].get('name') or '').strip()
+        if first_dept:
+            return RedirectResponse(
+                url=f"/orders?department={quote_plus(first_dept)}",
+                status_code=302,
+            )
     service = get_purchase_order_service(db)
     suggestions = service.build_low_stock_candidates(selected_department)
-    sidebar_structure = build_sidebar_structure(load_inventory_snapshots(db))
     low_stock_count = len(suggestions)
     existing_orders = service.list_orders(selected_department)
     draft_count = sum(1 for order in existing_orders if order.get('status') == PurchaseOrderStatus.DRAFT.value)
@@ -2215,6 +2362,7 @@ def create_bulk_purchase_orders(
         result = service.create_bulk_orders_from_low_stock(
             ordered_by_user=normalize_field(payload.ordered_by_user),
             department=normalize_field(payload.department),
+            candidate_overrides=payload.candidate_overrides,
         )
     except PurchaseOrderError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -2324,7 +2472,7 @@ def update_purchase_order_status(
     if target_status in {PurchaseOrderStatus.WAITING.value, PurchaseOrderStatus.RECEIVED.value}:
         raise HTTPException(
             status_code=400,
-            detail="入庫待ち・納品計上は発注一覧から変更できません。入出荷管理ページで実行してください。",
+            detail="入庫待ち・納品計上は発注一覧から変更できません。入出庫管理ページで実行してください。",
         )
     service = get_purchase_order_service(db)
     try:
@@ -2344,8 +2492,6 @@ def history_page(
     current_user: Optional[Dict[str, Any]] = Depends(get_optional_user),
 ) -> HTMLResponse:
     transactions = load_recent_transactions(db, limit=50)
-    if not transactions:
-        transactions = RECENT_TRANSACTIONS
     context = {
         'request': request,
         'nav_links': build_nav_links('/history', current_user),
@@ -2420,6 +2566,29 @@ def update_supplier(
     return {'id': supplier.id, 'name': supplier.name}
 
 
+@app.delete('/api/suppliers/{supplier_id}')
+def delete_supplier(
+    supplier_id: int,
+    db: Session = Depends(get_db),
+    current_user: Dict[str, Any] = Depends(require_manager_user),
+) -> Dict[str, object]:
+    """仕入先を削除する。品目または発注に紐づいている場合は削除不可。"""
+    _ = current_user
+    supplier = db.scalar(select(Supplier).filter(Supplier.id == supplier_id))
+    if not supplier:
+        raise HTTPException(status_code=404, detail='仕入先が見つかりません。')
+    items_count = db.scalar(select(func.count(Item.id)).where(Item.supplier_id == supplier_id))
+    orders_count = db.scalar(select(func.count(PurchaseOrder.id)).where(PurchaseOrder.supplier_id == supplier_id))
+    if (items_count or 0) > 0 or (orders_count or 0) > 0:
+        raise HTTPException(
+            status_code=400,
+            detail='この仕入先は品目または発注に紐づいているため削除できません。',
+        )
+    db.delete(supplier)
+    db.commit()
+    return {'id': supplier_id, 'message': '仕入先を削除しました。'}
+
+
 def _resolve_supplier(db: Session, supplier_id: Optional[int]) -> Optional[Supplier]:
     if supplier_id is None:
         return None
@@ -2467,6 +2636,7 @@ def create_item(
         shelf=payload.shelf.strip() or None,
         unit=payload.unit.strip() or None,
         reorder_point=max(0, payload.reorder_point),
+        default_order_quantity=max(1, payload.default_order_quantity),
         management_type=management_type,
         supplier_id=supplier.id if supplier else None,
     )
@@ -2511,6 +2681,7 @@ def update_item(
     item.shelf = payload.shelf.strip() or None
     item.unit = payload.unit.strip() or None
     item.reorder_point = max(0, payload.reorder_point)
+    item.default_order_quantity = max(1, payload.default_order_quantity)
     management_type = (payload.management_type or '').strip()
     if management_type in ('管理', '管理外'):
         item.management_type = management_type
@@ -2519,6 +2690,28 @@ def update_item(
     item.supplier_id = supplier.id if supplier else None
     db.commit()
     return {'id': item.id, 'item_code': item.item_code}
+
+
+@app.delete('/api/items/{item_id}')
+def delete_item(
+    item_id: int,
+    db: Session = Depends(get_db),
+    current_user: Dict[str, Any] = Depends(require_manager_user),
+) -> Dict[str, object]:
+    """仕入品を削除する。発注明細に紐づいている場合は削除不可。在庫・在庫履歴は連鎖削除される。"""
+    _ = current_user
+    item = db.scalar(select(Item).filter(Item.id == item_id))
+    if not item:
+        raise HTTPException(status_code=404, detail='仕入品が見つかりません。')
+    lines_count = db.scalar(select(func.count(PurchaseOrderLine.id)).where(PurchaseOrderLine.item_id == item_id))
+    if (lines_count or 0) > 0:
+        raise HTTPException(
+            status_code=400,
+            detail='この品目は発注明細に紐づいているため削除できません。',
+        )
+    db.delete(item)
+    db.commit()
+    return {'id': item_id, 'message': '仕入品を削除しました。'}
 
 
 @app.get('/api/items')
@@ -2548,6 +2741,7 @@ def search_items(
             'shelf': item.shelf or '',
             'unit': item.unit or '',
             'reorder_point': item.reorder_point or 0,
+            'default_order_quantity': getattr(item, 'default_order_quantity', 1) or 1,
             'management_type': item.management_type or '',
             'supplier_id': item.supplier_id,
             'supplier_name': item.supplier.name if item.supplier else '',

@@ -75,7 +75,7 @@
           <div class="flex flex-wrap gap-2">
             {% for cat in section.categories %}
             {% set is_active = (selected_usage == cat.name) and (selected_department == section.name) %}
-            <a href="{{ build_inventory_url(keyword, selected_category, selected_usage, usage=cat.name, department=section.name, category_override='') }}" class="rounded-full border px-3 py-1 text-xs {% if is_active %}border-primary bg-primary/10 text-primary{% else %}border-slate-200 bg-slate-50 text-slate-600{% endif %}">
+            <a href="{{ build_inventory_url(keyword, selected_category, selected_usage, usage=cat.name, department=section.name, category_override='', q='') }}" class="rounded-full border px-3 py-1 text-xs {% if is_active %}border-primary bg-primary/10 text-primary{% else %}border-slate-200 bg-slate-50 text-slate-600{% endif %}">
               {{ cat.name }}
             </a>
             {% endfor %}
@@ -86,49 +86,27 @@
     </aside>
     <main class="flex-1 overflow-y-auto bg-slate-100">
       <div class="max-w-screen-xl mx-auto px-4 py-6 space-y-6">
-        <section class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          {% for card in kpi_cards %}
-          <article class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-            <div class="flex items-center justify-between text-xs text-slate-500 uppercase tracking-[0.3em]">
-              <span>{{ card.label }}</span>
-              <span class="material-symbols-outlined text-lg text-slate-400">{{ card.icon }}</span>
-            </div>
-            <p class="mt-3 text-3xl font-bold text-slate-900">{{ card.value }}</p>
-            <p class="text-xs text-slate-500">{{ card.note }}</p>
-          </article>
-          {% endfor %}
-        </section>
         <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm space-y-4">
-          <form method="get" action="/inventory" class="grid gap-3 lg:grid-cols-3">
+          <form method="get" action="/inventory" class="flex flex-wrap items-end gap-3">
+            <input type="hidden" name="category" value="{{ selected_category }}">
             <label class="flex flex-col gap-2 text-sm">
               <span class="text-slate-500 font-semibold">検索</span>
               <input type="text" name="q" value="{{ keyword }}" placeholder="品番・品名・部署・カテゴリ" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm focus:border-primary focus:ring-1 focus:ring-primary outline-none">
-            </label>
-            <label class="flex flex-col gap-2 text-sm">
-              <span class="text-slate-500 font-semibold">種類</span>
-              <select name="category" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm focus:border-primary focus:ring-1 focus:ring-primary outline-none">
-                <option value="">すべて</option>
-                {% for cat in type_options %}
-                <option value="{{ cat }}" {% if cat == selected_category %}selected{% endif %}>{{ cat }}</option>
-                {% endfor %}
-              </select>
             </label>
             <button type="submit" class="rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-white transition hover:bg-primary-dark">絞り込み</button>
           </form>
           {% if selected_department %}
           <div class="flex flex-wrap gap-2 text-xs">
-            <a href="{{ build_inventory_url(keyword, selected_category, selected_usage, department=selected_department, category_override='') }}" class="rounded-full border px-3 py-1 {% if not selected_category %}border-primary bg-primary/10 text-primary{% else %}border-slate-200 bg-slate-50 text-slate-600{% endif %}">すべて</a>
+            <a href="{{ build_inventory_url(keyword, selected_category, selected_usage, department=selected_department, category_override='', q='') }}" class="rounded-full border px-3 py-1 {% if not selected_category %}border-primary bg-primary/10 text-primary{% else %}border-slate-200 bg-slate-50 text-slate-600{% endif %}">すべて</a>
             {% for cat in type_options %}
-            <a href="{{ build_inventory_url(keyword, selected_category, selected_usage, department=selected_department, category_override=cat) }}" class="rounded-full border px-3 py-1 {% if cat == selected_category %}border-primary bg-primary/10 text-primary{% else %}border-slate-200 bg-slate-50 text-slate-600{% endif %}">{{ cat }}</a>
+            <a href="{{ build_inventory_url(keyword, selected_category, selected_usage, department=selected_department, category_override=cat, q='') }}" class="rounded-full border px-3 py-1 {% if cat == selected_category %}border-primary bg-primary/10 text-primary{% else %}border-slate-200 bg-slate-50 text-slate-600{% endif %}">{{ cat }}</a>
             {% endfor %}
           </div>
           {% endif %}
-          <p class="text-[11px] text-slate-400">在庫数量の変更はすべてトランザクション（入庫/出庫/調整）で実施してください。</p>
         </section>
         <section class="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
           <div class="flex items-center justify-between border-b border-slate-100 px-6 py-3 text-sm font-semibold text-slate-700">
             <span>在庫一覧（{{ filtered_count }} / {{ total_items }} 件）</span>
-            <span class="text-xs text-slate-500">CSVを正とした在庫マスタから表示</span>
           </div>
           <div class="overflow-x-auto">
             <table class="min-w-full text-left text-sm">
@@ -159,6 +137,8 @@
                     data-item-supplier="{{ item.supplier }}"
                     data-item-last-activity="{{ item.last_activity }}"
                     data-item-last-updated="{{ item.last_updated }}"
+                    data-item-order-status="{{ item.order_status_display }}"
+                    data-item-order-due="{{ item.order_due_display }}"
                 >
                   <td class="px-6 py-4 text-left text-slate-700">
                     {{ item.shelf or '未設定' }}
@@ -181,7 +161,11 @@
                   <td class="px-6 py-4">
                     <p data-role="last-activity" class="text-sm font-semibold text-slate-900">{{ item.last_activity }}</p>
                     <p data-role="last-updated" class="text-[11px] text-slate-500">{{ item.last_updated }}</p>
-                    <p data-role="supplier" class="text-[11px] text-slate-400">{{ item.supplier }}</p>
+                    {% if item.order_status_display %}
+                    <p data-role="order-status" class="text-[11px] font-medium text-primary">{{ item.order_status_display }}{% if item.order_due_display %} 納期: {{ item.order_due_display }}{% endif %}</p>
+                    {% else %}
+                    <p data-role="order-status" class="text-[11px] text-slate-400">-</p>
+                    {% endif %}
                   </td>
                 </tr>
                 {% endfor %}
@@ -239,7 +223,7 @@
           <div class="space-y-1 text-[11px] text-slate-500">
             <p>最終取引: <span id="inventory-modal-last-activity">-</span></p>
             <p>更新日時: <span id="inventory-modal-last-updated">-</span></p>
-            <p>仕入先: <span id="inventory-modal-supplier">-</span></p>
+            <p>発注状況: <span id="inventory-modal-order-status">-</span></p>
           </div>
         </div>
         <div class="mt-4 flex justify-end gap-3">
@@ -283,7 +267,7 @@
         const manufacturerDisplay = document.getElementById('inventory-modal-manufacturer');
         const lastActivityDisplay = document.getElementById('inventory-modal-last-activity');
         const lastUpdatedDisplay = document.getElementById('inventory-modal-last-updated');
-        const supplierDisplay = document.getElementById('inventory-modal-supplier');
+        const orderStatusDisplay = document.getElementById('inventory-modal-order-status');
         const confirmButton = document.getElementById('inventory-modal-confirm');
         const recentContainer = document.getElementById('recent-transactions-list');
         const recentCount = document.getElementById('recent-transactions-count');
@@ -344,7 +328,10 @@
           statusBadge.className = 'inline-flex items-center justify-center rounded-full border px-3 py-1 text-[11px] font-semibold tracking-wide ' + (payload.status_badge || '');
           lastActivityDisplay.textContent = payload.last_activity || '-';
           lastUpdatedDisplay.textContent = payload.last_updated || '-';
-          supplierDisplay.textContent = payload.supplier || '-';
+          const orderText = payload.order_status_display
+            ? (payload.order_due_display ? `${payload.order_status_display} 納期: ${payload.order_due_display}` : payload.order_status_display)
+            : '-';
+          orderStatusDisplay.textContent = orderText;
         };
         const setQuantity = (value) => {
           currentQuantity = Math.max(0, value);
@@ -368,7 +355,8 @@
           activeRow.dataset.itemStatusBadge = payload.status_badge;
           activeRow.dataset.itemLastActivity = payload.last_activity;
           activeRow.dataset.itemLastUpdated = payload.last_updated;
-          activeRow.dataset.itemSupplier = payload.supplier;
+          activeRow.dataset.itemOrderStatus = payload.order_status_display || '';
+          activeRow.dataset.itemOrderDue = payload.order_due_display || '';
           activeRow.classList.remove('bg-red-50');
           if (gap <= 0) {
             activeRow.classList.add('bg-red-50');
@@ -397,15 +385,18 @@
           }
           const lastActivityElRow = activeRow.querySelector('[data-role="last-activity"]');
           const lastUpdatedElRow = activeRow.querySelector('[data-role="last-updated"]');
-          const supplierElRow = activeRow.querySelector('[data-role="supplier"]');
+          const orderStatusElRow = activeRow.querySelector('[data-role="order-status"]');
           if (lastActivityElRow) {
             lastActivityElRow.textContent = payload.last_activity;
           }
           if (lastUpdatedElRow) {
             lastUpdatedElRow.textContent = payload.last_updated;
           }
-          if (supplierElRow) {
-            supplierElRow.textContent = payload.supplier;
+          if (orderStatusElRow) {
+            orderStatusElRow.textContent = payload.order_status_display
+              ? (payload.order_due_display ? `${payload.order_status_display} 納期: ${payload.order_due_display}` : payload.order_status_display)
+              : '-';
+            orderStatusElRow.className = payload.order_status_display ? 'text-[11px] font-medium text-primary' : 'text-[11px] text-slate-400';
           }
           updateModalVisuals(payload);
           setQuantity(payload.on_hand);
@@ -490,7 +481,9 @@
           statusBadge.className = 'inline-flex items-center justify-center rounded-full border px-3 py-1 text-[11px] font-semibold tracking-wide ' + (row.dataset.itemStatusBadge || '');
           lastActivityDisplay.textContent = row.dataset.itemLastActivity || '-';
           lastUpdatedDisplay.textContent = row.dataset.itemLastUpdated || '-';
-          supplierDisplay.textContent = row.dataset.itemSupplier || '-';
+          const orderStatus = row.dataset.itemOrderStatus || '';
+          const orderDue = row.dataset.itemOrderDue || '';
+          orderStatusDisplay.textContent = orderStatus ? (orderDue ? `${orderStatus} 納期: ${orderDue}` : orderStatus) : '-';
           const starting = parseIntegerValue(row.dataset.itemOnHand);
           initialQuantity = starting;
           setQuantity(starting);

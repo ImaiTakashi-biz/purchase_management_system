@@ -137,7 +137,7 @@
         <div class="mt-4 grid gap-2">
           {% if current_user and current_user.get('role') in ['manager', 'admin'] %}
           <a href="/orders" class="rounded-xl bg-primary px-3 py-2 text-center text-sm font-semibold text-white hover:bg-primary-dark">発注管理へ</a>
-          <a href="/logistics" class="rounded-xl border border-slate-300 px-3 py-2 text-center text-sm font-semibold text-slate-700 hover:bg-slate-50">入出荷管理へ</a>
+          <a href="/logistics" class="rounded-xl border border-slate-300 px-3 py-2 text-center text-sm font-semibold text-slate-700 hover:bg-slate-50">入出庫管理へ</a>
           {% endif %}
         </div>
       </article>
@@ -169,7 +169,7 @@
                 <td class="px-3 py-2">{{ order.supplier_name }}</td>
                 <td class="px-3 py-2">
                   <span class="inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold {% if order.status == 'WAITING' %}border-amber-200 bg-amber-50 text-amber-700{% else %}border-blue-200 bg-blue-50 text-blue-700{% endif %}">
-                    {{ order.status }}
+                    {{ order.status | status_ja }}
                   </span>
                 </td>
                 <td class="px-3 py-2 text-right font-semibold">{{ order.remaining_quantity_total }}</td>

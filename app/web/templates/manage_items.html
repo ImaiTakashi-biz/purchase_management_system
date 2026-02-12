@@ -44,7 +44,7 @@
       <article class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm space-y-4">
         <div>
           <p class="text-xs uppercase tracking-[0.3em] text-slate-500">Item</p>
-          <h2 class="text-lg font-semibold">仕入品を追加 / 編集</h2>
+          <h2 class="text-lg font-semibold">仕入品の新規登録・追加 / 編集</h2>
         </div>
         <div class="space-y-1">
           <label class="text-xs text-slate-500">仕入品検索</label>
@@ -63,32 +63,62 @@
           <input type="hidden" id="item-id" value="" />
           <label class="flex flex-col gap-1 text-sm">
             <span class="text-xs text-slate-500">品番</span>
-            <input id="item-code" type="text" required class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2" />
+            <input id="item-code" type="text" list="datalist-item-code" required class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2" placeholder="既存の品番から選択または新規入力" autocomplete="off" />
+            <datalist id="datalist-item-code">
+              {% for v in distinct_item_codes %}
+              <option value="{{ v }}"></option>
+              {% endfor %}
+            </datalist>
           </label>
           <div class="grid gap-2 md:grid-cols-2">
             <label class="flex flex-col gap-1 text-sm">
               <span class="text-xs text-slate-500">カテゴリ</span>
-              <input id="item-type" type="text" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2" />
+              <input id="item-type" type="text" list="datalist-item-type" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2" placeholder="既存から選択または新規入力" autocomplete="off" />
+              <datalist id="datalist-item-type">
+                {% for v in distinct_item_types %}
+                <option value="{{ v }}"></option>
+                {% endfor %}
+              </datalist>
             </label>
             <label class="flex flex-col gap-1 text-sm">
               <span class="text-xs text-slate-500">用途</span>
-              <input id="item-usage" type="text" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2" />
+              <input id="item-usage" type="text" list="datalist-item-usage" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2" placeholder="既存から選択または新規入力" autocomplete="off" />
+              <datalist id="datalist-item-usage">
+                {% for v in distinct_usages %}
+                <option value="{{ v }}"></option>
+                {% endfor %}
+              </datalist>
             </label>
           </div>
           <div class="grid gap-2 md:grid-cols-2">
             <label class="flex flex-col gap-1 text-sm">
               <span class="text-xs text-slate-500">部署</span>
-              <input id="item-department" type="text" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2" />
+              <input id="item-department" type="text" list="datalist-item-department" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2" placeholder="既存から選択または新規入力" autocomplete="off" />
+              <datalist id="datalist-item-department">
+                {% for v in distinct_departments %}
+                <option value="{{ v }}"></option>
+                {% endfor %}
+              </datalist>
             </label>
             <label class="flex flex-col gap-1 text-sm">
               <span class="text-xs text-slate-500">メーカー</span>
-              <input id="item-manufacturer" type="text" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2" />
+              <input id="item-manufacturer" type="text" list="datalist-item-manufacturer" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2" placeholder="既存から選択または新規入力" autocomplete="off" />
+              <datalist id="datalist-item-manufacturer">
+                {% for v in distinct_manufacturers %}
+                <option value="{{ v }}"></option>
+                {% endfor %}
+              </datalist>
             </label>
           </div>
           <div class="grid gap-2 md:grid-cols-2">
             <label class="flex flex-col gap-1 text-sm">
               <span class="text-xs text-slate-500">棚番</span>
-              <input id="item-shelf" type="text" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2" />
+              <input id="item-shelf" type="text" list="datalist-item-shelf" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2" placeholder="既存から選択または新規入力" autocomplete="off" />
+              <datalist id="datalist-item-shelf">
+                {% for v in distinct_shelves %}
+                <option value="{{ v }}"></option>
+                {% endfor %}
+              </datalist>
             </label>
             <label class="flex flex-col gap-1 text-sm">
               <span class="text-xs text-slate-500">管理区分</span>
@@ -104,18 +134,23 @@
               <input id="item-reorder" type="number" min="0" value="0" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2" />
             </label>
             <label class="flex flex-col gap-1 text-sm">
-              <span class="text-xs text-slate-500">仕入先</span>
-              <select id="item-supplier" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-                <option value="">未選択</option>
-                {% for supplier in suppliers %}
-                <option value="{{ supplier.id }}">{{ supplier.name }}</option>
-                {% endfor %}
-              </select>
+              <span class="text-xs text-slate-500">注文数量</span>
+              <input id="item-default-order-quantity" type="number" min="1" value="1" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2" title="発注時のデフォルト数量" />
             </label>
           </div>
-          <div class="flex gap-2">
-            <button type="submit" class="flex-1 rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700">保存</button>
-            <button type="button" id="item-form-reset" class="rounded-xl border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50">新規</button>
+          <label class="flex flex-col gap-1 text-sm">
+            <span class="text-xs text-slate-500">仕入先</span>
+            <select id="item-supplier" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+              <option value="">未選択</option>
+              {% for supplier in suppliers %}
+              <option value="{{ supplier.id }}">{{ supplier.name }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <div class="flex flex-wrap gap-2">
+            <button type="submit" class="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700">保存</button>
+            <button type="button" id="item-delete" class="rounded-xl border border-rose-300 px-4 py-2 text-sm text-rose-700 hover:bg-rose-50">削除</button>
+            <button type="button" id="item-form-reset" class="rounded-xl border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50">クリア</button>
           </div>
         </form>
       </article>
@@ -142,6 +177,17 @@
     </div>
   </div>
   <div id="toast-container" class="pointer-events-none fixed right-4 top-4 z-[80] flex w-[340px] max-w-[calc(100vw-2rem)] flex-col gap-2"></div>
+  <div id="confirm-modal" class="hidden fixed inset-0 z-[75] items-center justify-center px-4 py-6">
+    <button type="button" id="confirm-modal-backdrop" class="absolute inset-0 bg-slate-900/40" aria-label="閉じる"></button>
+    <div class="relative w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl">
+      <p class="text-sm font-semibold text-slate-900">確認</p>
+      <p id="confirm-modal-message" class="mt-2 text-sm text-slate-700">この操作を実行します。よろしいですか？</p>
+      <div class="mt-4 flex justify-end gap-2">
+        <button type="button" id="confirm-modal-cancel" class="rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">キャンセル</button>
+        <button type="button" id="confirm-modal-ok" class="rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-dark">実行</button>
+      </div>
+    </div>
+  </div>
 
   <script id="initial-items-data" type="application/json">
     {{ items_data | tojson | safe }}
@@ -157,15 +203,40 @@
       const itemManufacturerInput = document.getElementById('item-manufacturer');
       const itemShelfInput = document.getElementById('item-shelf');
       const itemReorderInput = document.getElementById('item-reorder');
+      const itemDefaultOrderQuantityInput = document.getElementById('item-default-order-quantity');
       const itemManagementTypeSelect = document.getElementById('item-management-type');
       const itemSupplierSelect = document.getElementById('item-supplier');
       const itemReset = document.getElementById('item-form-reset');
+      const itemDelete = document.getElementById('item-delete');
       const itemList = document.getElementById('item-list');
       const itemSearchInput = document.getElementById('item-search-input');
       const itemSearchButton = document.getElementById('item-search-button');
       const loadingOverlay = document.getElementById('global-loading');
       const loadingMessage = document.getElementById('global-loading-message');
       const toastContainer = document.getElementById('toast-container');
+      const confirmModal = document.getElementById('confirm-modal');
+      const confirmModalMessage = document.getElementById('confirm-modal-message');
+      const confirmModalOk = document.getElementById('confirm-modal-ok');
+      const confirmModalCancel = document.getElementById('confirm-modal-cancel');
+      const confirmModalBackdrop = document.getElementById('confirm-modal-backdrop');
+      let confirmResolver = null;
+      const openConfirmModal = (message) => new Promise((resolve) => {
+        if (!confirmModal || !confirmModalMessage) { resolve(false); return; }
+        confirmResolver = resolve;
+        confirmModalMessage.textContent = message;
+        confirmModal.classList.remove('hidden');
+        confirmModal.classList.add('flex');
+      });
+      const closeConfirmModal = (accepted) => {
+        if (!confirmModal) return;
+        confirmModal.classList.add('hidden');
+        confirmModal.classList.remove('flex');
+        if (confirmResolver) { const r = confirmResolver; confirmResolver = null; r(Boolean(accepted)); }
+      };
+      confirmModalOk?.addEventListener('click', () => closeConfirmModal(true));
+      confirmModalCancel?.addEventListener('click', () => closeConfirmModal(false));
+      confirmModalBackdrop?.addEventListener('click', () => closeConfirmModal(false));
+      document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && confirmResolver) closeConfirmModal(false); });
       const MIN_LOADING_VISIBLE_MS = 450;
       const FLASH_TOAST_KEY = 'pms_flash_toast_manage_items';
       let loadingStartedAt = 0;
@@ -242,6 +313,7 @@
         itemManufacturerInput.value = '';
         itemShelfInput.value = '';
         itemReorderInput.value = '0';
+        itemDefaultOrderQuantityInput.value = '1';
         itemManagementTypeSelect.value = '管理';
         itemSupplierSelect.value = '';
       };
@@ -257,6 +329,7 @@
         row.dataset.manufacturer = item.manufacturer || '';
         row.dataset.shelf = item.shelf || '';
         row.dataset.reorder = item.reorder_point ?? 0;
+        row.dataset.defaultOrderQuantity = item.default_order_quantity ?? 1;
         row.dataset.managementType = item.management_type || '管理';
         row.dataset.supplier = item.supplier_id || '';
         row.innerHTML = `
@@ -276,6 +349,7 @@
           itemManufacturerInput.value = row.dataset.manufacturer || '';
           itemShelfInput.value = row.dataset.shelf || '';
           itemReorderInput.value = row.dataset.reorder || '0';
+          itemDefaultOrderQuantityInput.value = row.dataset.defaultOrderQuantity || '1';
           itemManagementTypeSelect.value = row.dataset.managementType || '管理';
           itemSupplierSelect.value = row.dataset.supplier || '';
           window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -318,6 +392,7 @@
           manufacturer: itemManufacturerInput.value.trim(),
           shelf: itemShelfInput.value.trim(),
           reorder_point: Number(itemReorderInput.value) || 0,
+          default_order_quantity: Math.max(1, Number(itemDefaultOrderQuantityInput.value) || 1),
           management_type: itemManagementTypeSelect.value || '管理',
           supplier_id: itemSupplierSelect.value ? Number(itemSupplierSelect.value) : null,
         };
@@ -353,6 +428,31 @@
         if (event.key === 'Enter') fetchItems(itemSearchInput.value || '');
       });
       itemReset?.addEventListener('click', resetItemForm);
+
+      itemDelete?.addEventListener('click', async () => {
+        const id = itemIdInput.value.trim();
+        if (!id) {
+          showToast('削除する仕入品を一覧から選択してください。', 'error');
+          return;
+        }
+        const label = `${itemCodeInput.value.trim() || ''} ${itemTypeInput.value.trim() || ''}`.trim() || '（品番・品名なし）';
+        const ok = await openConfirmModal(`「${label}」を削除しますか？発注明細に紐づいている場合は削除できません。在庫・在庫履歴は削除されます。`);
+        if (!ok) return;
+        try {
+          setLoading(true, '仕入品を削除しています...');
+          const response = await fetch(`/api/items/${id}`, { method: 'DELETE' });
+          const result = await response.json().catch(() => ({}));
+          if (!response.ok) {
+            throw new Error(result.detail || '削除に失敗しました。');
+          }
+          resetItemForm();
+          reloadWithToast(result.message || '仕入品を削除しました。', 'success');
+        } catch (error) {
+          showToast(error.message || String(error), 'error');
+        } finally {
+          setLoading(false);
+        }
+      });
 
       renderItemList(initialItems);
     });

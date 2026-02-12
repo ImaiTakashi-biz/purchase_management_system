@@ -50,11 +50,6 @@
         <p class="text-lg font-semibold">絞り込み</p>
       </div>
       <div class="p-5 space-y-2">
-        <button
-          class="w-full rounded-xl border px-3 py-2 text-left text-sm font-semibold {% if not selected_department %}border-primary bg-primary/10 text-primary{% else %}border-slate-200 bg-slate-50 text-slate-700{% endif %}"
-          type="button"
-          onclick="location.href='/orders'"
-        >全部署</button>
         {% for section in sidebar_structure %}
         <button
           class="w-full rounded-xl border px-3 py-2 text-left text-sm font-semibold {% if selected_department == section.name %}border-primary bg-primary/10 text-primary{% else %}border-slate-200 bg-slate-50 text-slate-700{% endif %}"
@@ -82,9 +77,7 @@
 
         <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm space-y-4">
           <div>
-            <p class="text-xs uppercase tracking-[0.3em] text-slate-500">Step 1</p>
             <h2 class="text-lg font-semibold">発注候補から新規発注を作成</h2>
-            <p class="text-xs text-slate-500">既存発注の操作（注文書作成・再生成・送信・取消）は、一覧に保存された発注担当者を優先して使用します。</p>
           </div>
           <div class="grid gap-3 md:grid-cols-3">
             <label class="flex flex-col gap-1 text-sm">
@@ -151,7 +144,7 @@
         <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm space-y-4">
           <div class="flex items-center justify-between">
             <h2 class="text-lg font-semibold">発注一覧</h2>
-            <p class="text-xs text-slate-500">部署: {{ selected_department if selected_department else 'すべて' }}</p>
+            <p class="text-xs text-slate-500">部署: {{ selected_department or '未選択' }}</p>
           </div>
 
           <div class="space-y-4">
@@ -166,17 +159,16 @@
                   <p class="text-xs text-slate-500">発注担当: {{ order.ordered_by_user or '未設定' }} / 発行日: {{ order.issued_date or '未作成' }}</p>
                 </div>
                 <div class="flex flex-wrap items-center gap-2">
-                  <span class="rounded-full border px-3 py-1 text-xs font-semibold {% if order.status == 'DRAFT' %}bg-slate-100 text-slate-700 border-slate-300{% elif order.status == 'CONFIRMED' %}bg-blue-50 text-blue-700 border-blue-200{% elif order.status == 'SENT' %}bg-indigo-50 text-indigo-700 border-indigo-200{% elif order.status == 'WAITING' %}bg-amber-50 text-amber-700 border-amber-200{% elif order.status == 'RECEIVED' %}bg-emerald-50 text-emerald-700 border-emerald-200{% else %}bg-rose-50 text-rose-700 border-rose-200{% endif %}">{{ order.status }}</span>
+                  <span class="rounded-full border px-3 py-1 text-xs font-semibold {% if order.status == 'DRAFT' %}bg-slate-100 text-slate-700 border-slate-300{% elif order.status == 'CONFIRMED' %}bg-blue-50 text-blue-700 border-blue-200{% elif order.status == 'SENT' %}bg-indigo-50 text-indigo-700 border-indigo-200{% elif order.status == 'WAITING' %}bg-amber-50 text-amber-700 border-amber-200{% elif order.status == 'RECEIVED' %}bg-emerald-50 text-emerald-700 border-emerald-200{% else %}bg-rose-50 text-rose-700 border-rose-200{% endif %}">{{ order.status | status_ja }}</span>
                   <button class="btn-preview-doc rounded border border-slate-300 px-3 py-1 text-xs" data-order-id="{{ order.id }}">注文書プレビュー</button>
                   <button class="btn-generate-doc rounded border border-slate-300 px-3 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-50" data-order-id="{{ order.id }}" data-regenerate="false" data-ordered-by="{{ order.ordered_by_user or '' }}" {% if not can_operate_order %}disabled title="完了済み発注は注文書作成できません"{% endif %}>注文書作成</button>
-                  <button class="btn-generate-doc rounded border border-slate-300 px-3 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-50" data-order-id="{{ order.id }}" data-regenerate="true" data-ordered-by="{{ order.ordered_by_user or '' }}" {% if not can_operate_order %}disabled title="完了済み発注は再生成できません"{% endif %}>再生成</button>
                   <button class="btn-email-preview rounded bg-primary px-3 py-1 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50" data-order-id="{{ order.id }}" data-ordered-by="{{ order.ordered_by_user or '' }}" {% if not can_operate_order %}disabled title="完了済み発注はメール操作できません"{% endif %}>メールプレビュー</button>
                 </div>
               </div>
 
               <div class="flex flex-wrap gap-2">
                 {% if order.status == 'SENT' or order.status == 'WAITING' %}
-                <span class="rounded border border-slate-200 bg-slate-50 px-3 py-1 text-xs text-slate-500">入庫計上は「入出荷管理」で実行してください</span>
+                <span class="rounded border border-slate-200 bg-slate-50 px-3 py-1 text-xs text-slate-500">入庫計上は「入出庫管理」で実行してください</span>
                 {% endif %}
                 {% if order.status != 'RECEIVED' and order.status != 'CANCELLED' %}
                 <button class="btn-update-status rounded border border-rose-300 px-3 py-1 text-xs text-rose-700" data-order-id="{{ order.id }}" data-order-status="{{ order.status }}" data-status="CANCELLED" data-ordered-by="{{ order.ordered_by_user or '' }}">取消</button>
@@ -246,10 +238,6 @@
         <div><span class="font-semibold">添付:</span> <span id="preview-attachment"></span></div>
       </div>
       <textarea id="preview-body" class="w-full h-48 rounded-xl border border-slate-300 p-3 text-sm" readonly></textarea>
-      <label class="inline-flex items-center gap-2 text-sm">
-        <input id="preview-regenerate" type="checkbox" />
-        <span>送信前に注文書を再生成する（別名保存）</span>
-      </label>
       <div class="flex justify-end gap-2">
         <button class="rounded border border-slate-300 px-4 py-2 text-sm" data-close-email-modal>キャンセル</button>
         <button id="preview-send" class="rounded bg-primary px-4 py-2 text-sm font-semibold text-white">送信</button>
@@ -270,6 +258,17 @@
   </div>
 
   <div id="toast-container" class="pointer-events-none fixed right-4 top-4 z-[80] flex w-[340px] max-w-[calc(100vw-2rem)] flex-col gap-2"></div>
+  <div id="confirm-modal" class="hidden fixed inset-0 z-[75] items-center justify-center px-4 py-6">
+    <button type="button" id="confirm-modal-backdrop" class="absolute inset-0 bg-slate-900/40" aria-label="閉じる"></button>
+    <div class="relative w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl">
+      <p class="text-sm font-semibold text-slate-900">確認</p>
+      <p id="confirm-modal-message" class="mt-2 text-sm text-slate-700">この操作を実行します。よろしいですか？</p>
+      <div class="mt-4 flex justify-end gap-2">
+        <button type="button" id="confirm-modal-cancel" class="rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">キャンセル</button>
+        <button type="button" id="confirm-modal-ok" class="rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-dark">実行</button>
+      </div>
+    </div>
+  </div>
 
   <script id="orders-context" type="application/json">
     {{ {'selected_department': selected_department} | tojson | safe }}
@@ -296,10 +295,42 @@
       const previewAttachment = document.getElementById('preview-attachment');
       const previewBody = document.getElementById('preview-body');
       const previewSendButton = document.getElementById('preview-send');
-      const previewRegenerate = document.getElementById('preview-regenerate');
       const loadingOverlay = document.getElementById('global-loading');
       const loadingMessage = document.getElementById('global-loading-message');
       const toastContainer = document.getElementById('toast-container');
+      const confirmModal = document.getElementById('confirm-modal');
+      const confirmModalMessage = document.getElementById('confirm-modal-message');
+      const confirmModalOk = document.getElementById('confirm-modal-ok');
+      const confirmModalCancel = document.getElementById('confirm-modal-cancel');
+      const confirmModalBackdrop = document.getElementById('confirm-modal-backdrop');
+      let confirmResolver = null;
+
+      const openConfirmModal = (message) => new Promise((resolve) => {
+        if (!confirmModal || !confirmModalMessage) {
+          resolve(false);
+          return;
+        }
+        confirmResolver = resolve;
+        confirmModalMessage.textContent = message;
+        confirmModal.classList.remove('hidden');
+        confirmModal.classList.add('flex');
+      });
+      const closeConfirmModal = (accepted) => {
+        if (!confirmModal) return;
+        confirmModal.classList.add('hidden');
+        confirmModal.classList.remove('flex');
+        if (confirmResolver) {
+          const r = confirmResolver;
+          confirmResolver = null;
+          r(Boolean(accepted));
+        }
+      };
+      confirmModalOk?.addEventListener('click', () => closeConfirmModal(true));
+      confirmModalCancel?.addEventListener('click', () => closeConfirmModal(false));
+      confirmModalBackdrop?.addEventListener('click', () => closeConfirmModal(false));
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && confirmResolver) closeConfirmModal(false);
+      });
 
       let currentPreviewOrderId = null;
       let currentPreviewOrderedBy = '';
@@ -533,12 +564,23 @@
           if (!orderedBy) {
             throw new Error('一括作成する場合は、発注担当者を選択してください。');
           }
+          const candidateOverrides = {};
+          document.querySelectorAll('.candidate-row').forEach((tr) => {
+            const itemId = tr.dataset.itemId;
+            if (!itemId) return;
+            const qtyInput = tr.querySelector('.order-qty');
+            const noteInput = tr.querySelector('.order-note');
+            const quantity = Math.max(1, parseInt(qtyInput?.value || '1', 10) || 1);
+            const note = (noteInput?.value || '').trim();
+            candidateOverrides[itemId] = { quantity, note };
+          });
           setLoading(true, '一括発注を作成しています...');
           const result = await jsonRequest('/purchase-orders/bulk-from-low-stock', {
             method: 'POST',
             body: JSON.stringify({
               department: selectedDepartment,
               ordered_by_user: orderedBy,
+              candidate_overrides: candidateOverrides,
             }),
           });
           const created = Number(result.created_count || 0);
@@ -647,7 +689,7 @@
             method: 'POST',
             body: JSON.stringify({
               sent_by: orderedBy,
-              regenerate: !!previewRegenerate.checked,
+              regenerate: false,
             }),
           });
           closeEmailModal();
@@ -708,14 +750,14 @@
                   return;
                 }
               }
-              const ok = window.confirm('この発注を取り消します。よろしいですか？');
+              const ok = await openConfirmModal('この発注を取り消しますか？');
               if (!ok) {
                 showToast('取消を中止しました。', 'info');
                 return;
               }
             }
             if (status === 'RECEIVED') {
-              const ok = window.confirm('納品計上を実行します。在庫へ加算されます。よろしいですか？');
+              const ok = await openConfirmModal('納品計上を実行します。在庫へ加算されます。よろしいですか？');
               if (!ok) {
                 return;
               }

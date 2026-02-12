@@ -1,5 +1,6 @@
-﻿from datetime import datetime
+from datetime import datetime
 from enum import Enum
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import (
     Boolean,
@@ -63,6 +64,7 @@ class Item(Base):
     shelf = Column(String(64), nullable=True)
     unit = Column(String(32), nullable=True)
     reorder_point = Column(Integer, default=0, nullable=False)
+    default_order_quantity = Column(Integer, default=1, nullable=False)
     supplier_id = Column(ForeignKey("suppliers.id"), nullable=True)
     management_type = Column(String(32), nullable=True)
     is_active = Column(Boolean, default=True, nullable=False)
@@ -102,6 +104,11 @@ class InventoryItem(Base):
     item = relationship("Item", back_populates="inventory_item")
 
 
+def _jst_now() -> datetime:
+    """在庫取引の発生時刻は JST で統一する（履歴の時系列整合のため）。"""
+    return datetime.now(ZoneInfo("Asia/Tokyo"))
+
+
 class InventoryTransaction(Base):
     __tablename__ = "inventory_transactions"
 
@@ -111,7 +118,7 @@ class InventoryTransaction(Base):
     delta = Column(Integer, nullable=False)
     reason = Column(String(256), nullable=True)
     note = Column(Text, nullable=True)
-    occurred_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    occurred_at = Column(DateTime, default=_jst_now, nullable=False)
     created_by = Column(String(128), nullable=True)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
 

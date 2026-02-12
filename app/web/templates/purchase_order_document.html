@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="ja">
 <head>
   <meta charset="utf-8" />
@@ -158,7 +158,8 @@
     .col-maker { width: 24%; }
     .col-qty { width: 8%; }
     .col-due { width: 16.5%; }
-    .col-note { width: 16.5%; }
+    .col-note { width: 16.5%; font-size: 10px; }
+    .col-note a { word-break: keep-all; overflow-wrap: anywhere; color: #0f4ccf; }
     .qty { text-align: center; }
     .item-main {
       font-weight: 600;
@@ -223,7 +224,7 @@ Email:
             <td>{{ row.maker }}</td>
             <td class="qty">{{ row.quantity }}</td>
             <td>{{ row.reply_due_date }}</td>
-            <td>{{ row.note }}</td>
+            <td class="col-note">{{ row.note_html | safe }}</td>
           </tr>
           {% endfor %}
         </tbody>
