@@ -65,6 +65,7 @@ class Item(Base):
     unit = Column(String(32), nullable=True)
     reorder_point = Column(Integer, default=0, nullable=False)
     default_order_quantity = Column(Integer, default=1, nullable=False)
+    unit_price = Column(Integer, nullable=True)  # 単価（円）。表示時は 1,000 のようにカンマ区切り
     supplier_id = Column(ForeignKey("suppliers.id"), nullable=True)
     management_type = Column(String(32), nullable=True)
     is_active = Column(Boolean, default=True, nullable=False)

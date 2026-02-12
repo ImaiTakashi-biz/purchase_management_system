@@ -114,26 +114,30 @@
                   <th class="px-3 py-2 text-left">仕入先</th>
                   <th class="px-3 py-2 text-right">在庫</th>
                   <th class="px-3 py-2 text-right">発注点</th>
+                  <th class="px-3 py-2 text-right">単価</th>
                   <th class="px-3 py-2 text-right">注文数量</th>
+                  <th class="px-3 py-2 text-right">金額</th>
                   <th class="px-3 py-2 text-left">備考</th>
                 </tr>
               </thead>
               <tbody class="divide-y divide-slate-100">
                 {% for row in low_stock_suggestions %}
-                <tr class="candidate-row hover:bg-slate-50" data-item-id="{{ row.item_id }}" data-supplier-id="{{ row.supplier_id or '' }}">
+                <tr class="candidate-row hover:bg-slate-50" data-item-id="{{ row.item_id }}" data-supplier-id="{{ row.supplier_id or '' }}" data-unit-price="{{ row.unit_price or '' }}">
                   <td class="px-3 py-2 text-center"><input type="checkbox" class="candidate-check" /></td>
                   <td class="px-3 py-2 font-semibold">{{ row.item_code }}</td>
                   <td class="px-3 py-2">{{ row.name }}</td>
                   <td class="px-3 py-2">{{ row.supplier_name }}</td>
                   <td class="px-3 py-2 text-right">{{ row.on_hand }}</td>
                   <td class="px-3 py-2 text-right">{{ row.reorder_point }}</td>
+                  <td class="px-3 py-2 text-right candidate-unit-price">{% if row.unit_price is not none %}{{ "{:,}".format(row.unit_price) }}{% else %}—{% endif %}</td>
                   <td class="px-3 py-2 text-right"><input type="number" min="1" value="{{ row.order_quantity }}" class="order-qty w-20 rounded border border-slate-300 px-2 py-1 text-right" /></td>
+                  <td class="px-3 py-2 text-right candidate-amount" data-unit-price="{{ row.unit_price or '' }}"><span class="candidate-amount-value">—</span></td>
                   <td class="px-3 py-2"><input type="text" class="order-note w-full rounded border border-slate-300 px-2 py-1" /></td>
                 </tr>
                 {% endfor %}
                 {% if not low_stock_suggestions %}
                 <tr>
-                  <td class="px-3 py-4 text-center text-slate-500" colspan="8">発注候補はありません。</td>
+                  <td class="px-3 py-4 text-center text-slate-500" colspan="10">発注候補はありません。</td>
                 </tr>
                 {% endif %}
               </tbody>
@@ -490,6 +494,29 @@
         check.addEventListener('change', syncCandidateSelectionUi);
       });
       syncCandidateSelectionUi();
+
+      // 発注候補の金額を単価×注文数量で算出し表示。注文数量変更時にリアルタイム更新
+      const updateCandidateAmount = (row) => {
+        const unitPrice = row.dataset.unitPrice !== '' && row.dataset.unitPrice != null ? Number(row.dataset.unitPrice) : null;
+        const qtyInput = row.querySelector('.order-qty');
+        const amountCell = row.querySelector('.candidate-amount-value');
+        if (!amountCell) return;
+        if (unitPrice == null || unitPrice < 0) {
+          amountCell.textContent = '—';
+          return;
+        }
+        const qty = Math.max(0, Number(qtyInput?.value || 0) || 0);
+        const amount = unitPrice * qty;
+        amountCell.textContent = amount.toLocaleString('ja-JP');
+      };
+      document.querySelectorAll('.candidate-row').forEach((row) => {
+        updateCandidateAmount(row);
+        const qtyInput = row.querySelector('.order-qty');
+        if (qtyInput) {
+          qtyInput.addEventListener('input', () => updateCandidateAmount(row));
+          qtyInput.addEventListener('change', () => updateCandidateAmount(row));
+        }
+      });
 
       createSelectedButton?.addEventListener('click', async () => {
         if (createSelectedInProgress) {

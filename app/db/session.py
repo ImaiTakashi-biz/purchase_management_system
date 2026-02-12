@@ -92,6 +92,7 @@ def init_db() -> None:
     with engine.connect() as conn:
         _ensure_column(conn, "items", "management_type", "VARCHAR(32)")
         _ensure_column(conn, "items", "default_order_quantity", "INTEGER NOT NULL DEFAULT 1")
+        _ensure_column(conn, "items", "unit_price", "INTEGER")
         _ensure_column(conn, "suppliers", "mobile_number", "VARCHAR(64)")
         _ensure_column(conn, "suppliers", "phone_number", "VARCHAR(64)")
         _ensure_column(conn, "suppliers", "email_cc", "VARCHAR(256)")

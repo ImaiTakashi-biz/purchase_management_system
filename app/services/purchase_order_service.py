@@ -167,6 +167,7 @@ class PurchaseOrderService:
                     "gap": on_hand - reorder,
                     "gap_label": f"{on_hand - reorder:+d}",
                     "order_quantity": max(1, getattr(item, "default_order_quantity", 1) or 1),
+                    "unit_price": getattr(item, "unit_price", None),
                     "note": "",
                 }
             )

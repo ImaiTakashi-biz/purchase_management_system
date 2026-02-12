@@ -328,6 +328,7 @@ class ItemPayload(BaseModel):
     unit: Optional[str] = ""
     reorder_point: int = 0
     default_order_quantity: int = 1
+    unit_price: Optional[int] = None  # 単価（円）。表示時は 1,000 形式
     management_type: Optional[str] = ""  # 管理 / 管理外
     supplier_id: Optional[int] = None
 
@@ -2051,6 +2052,7 @@ def serialize_items_for_manage(items: List[Item]) -> List[Dict[str, object]]:
             "unit": item.unit or "",
             "reorder_point": item.reorder_point or 0,
             "default_order_quantity": getattr(item, "default_order_quantity", 1) or 1,
+            "unit_price": getattr(item, "unit_price", None),
             "management_type": item.management_type or "",
             "supplier_id": item.supplier_id,
             "supplier_name": item.supplier.name if item.supplier else "",
@@ -2637,6 +2639,7 @@ def create_item(
         unit=payload.unit.strip() or None,
         reorder_point=max(0, payload.reorder_point),
         default_order_quantity=max(1, payload.default_order_quantity),
+        unit_price=payload.unit_price if payload.unit_price is not None else None,
         management_type=management_type,
         supplier_id=supplier.id if supplier else None,
     )
@@ -2682,6 +2685,7 @@ def update_item(
     item.unit = payload.unit.strip() or None
     item.reorder_point = max(0, payload.reorder_point)
     item.default_order_quantity = max(1, payload.default_order_quantity)
+    item.unit_price = payload.unit_price if payload.unit_price is not None else None
     management_type = (payload.management_type or '').strip()
     if management_type in ('管理', '管理外'):
         item.management_type = management_type
@@ -2742,6 +2746,7 @@ def search_items(
             'unit': item.unit or '',
             'reorder_point': item.reorder_point or 0,
             'default_order_quantity': getattr(item, 'default_order_quantity', 1) or 1,
+            'unit_price': getattr(item, 'unit_price', None),
             'management_type': item.management_type or '',
             'supplier_id': item.supplier_id,
             'supplier_name': item.supplier.name if item.supplier else '',

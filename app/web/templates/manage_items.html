@@ -63,7 +63,7 @@
           <input type="hidden" id="item-id" value="" />
           <label class="flex flex-col gap-1 text-sm">
             <span class="text-xs text-slate-500">品番</span>
-            <input id="item-code" type="text" list="datalist-item-code" required class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2" placeholder="既存の品番から選択または新規入力" autocomplete="off" />
+            <input id="item-code" type="text" list="datalist-item-code" required class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2" autocomplete="off" />
             <datalist id="datalist-item-code">
               {% for v in distinct_item_codes %}
               <option value="{{ v }}"></option>
@@ -73,7 +73,7 @@
           <div class="grid gap-2 md:grid-cols-2">
             <label class="flex flex-col gap-1 text-sm">
               <span class="text-xs text-slate-500">カテゴリ</span>
-              <input id="item-type" type="text" list="datalist-item-type" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2" placeholder="既存から選択または新規入力" autocomplete="off" />
+              <input id="item-type" type="text" list="datalist-item-type" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2" autocomplete="off" />
               <datalist id="datalist-item-type">
                 {% for v in distinct_item_types %}
                 <option value="{{ v }}"></option>
@@ -82,7 +82,7 @@
             </label>
             <label class="flex flex-col gap-1 text-sm">
               <span class="text-xs text-slate-500">用途</span>
-              <input id="item-usage" type="text" list="datalist-item-usage" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2" placeholder="既存から選択または新規入力" autocomplete="off" />
+              <input id="item-usage" type="text" list="datalist-item-usage" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2" autocomplete="off" />
               <datalist id="datalist-item-usage">
                 {% for v in distinct_usages %}
                 <option value="{{ v }}"></option>
@@ -93,7 +93,7 @@
           <div class="grid gap-2 md:grid-cols-2">
             <label class="flex flex-col gap-1 text-sm">
               <span class="text-xs text-slate-500">部署</span>
-              <input id="item-department" type="text" list="datalist-item-department" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2" placeholder="既存から選択または新規入力" autocomplete="off" />
+              <input id="item-department" type="text" list="datalist-item-department" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2" autocomplete="off" />
               <datalist id="datalist-item-department">
                 {% for v in distinct_departments %}
                 <option value="{{ v }}"></option>
@@ -102,7 +102,7 @@
             </label>
             <label class="flex flex-col gap-1 text-sm">
               <span class="text-xs text-slate-500">メーカー</span>
-              <input id="item-manufacturer" type="text" list="datalist-item-manufacturer" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2" placeholder="既存から選択または新規入力" autocomplete="off" />
+              <input id="item-manufacturer" type="text" list="datalist-item-manufacturer" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2" autocomplete="off" />
               <datalist id="datalist-item-manufacturer">
                 {% for v in distinct_manufacturers %}
                 <option value="{{ v }}"></option>
@@ -113,7 +113,7 @@
           <div class="grid gap-2 md:grid-cols-2">
             <label class="flex flex-col gap-1 text-sm">
               <span class="text-xs text-slate-500">棚番</span>
-              <input id="item-shelf" type="text" list="datalist-item-shelf" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2" placeholder="既存から選択または新規入力" autocomplete="off" />
+              <input id="item-shelf" type="text" list="datalist-item-shelf" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2" autocomplete="off" />
               <datalist id="datalist-item-shelf">
                 {% for v in distinct_shelves %}
                 <option value="{{ v }}"></option>
@@ -146,6 +146,10 @@
               <option value="{{ supplier.id }}">{{ supplier.name }}</option>
               {% endfor %}
             </select>
+          </label>
+          <label class="flex flex-col gap-1 text-sm">
+            <span class="text-xs text-slate-500">単価（円）</span>
+            <input id="item-unit-price" type="number" min="0" step="1" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2" />
           </label>
           <div class="flex flex-wrap gap-2">
             <button type="submit" class="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700">保存</button>
@@ -206,6 +210,7 @@
       const itemDefaultOrderQuantityInput = document.getElementById('item-default-order-quantity');
       const itemManagementTypeSelect = document.getElementById('item-management-type');
       const itemSupplierSelect = document.getElementById('item-supplier');
+      const itemUnitPriceInput = document.getElementById('item-unit-price');
       const itemReset = document.getElementById('item-form-reset');
       const itemDelete = document.getElementById('item-delete');
       const itemList = document.getElementById('item-list');
@@ -316,6 +321,7 @@
         itemDefaultOrderQuantityInput.value = '1';
         itemManagementTypeSelect.value = '管理';
         itemSupplierSelect.value = '';
+        itemUnitPriceInput.value = '';
       };
 
       const createItemRow = (item) => {
@@ -332,13 +338,15 @@
         row.dataset.defaultOrderQuantity = item.default_order_quantity ?? 1;
         row.dataset.managementType = item.management_type || '管理';
         row.dataset.supplier = item.supplier_id || '';
+        row.dataset.unitPrice = item.unit_price != null ? String(item.unit_price) : '';
+        const unitPriceDisplay = item.unit_price != null ? Number(item.unit_price).toLocaleString('ja-JP') : '-';
         row.innerHTML = `
           <div class="flex items-center justify-between">
             <p class="font-semibold">${item.item_code} - ${item.name || ''}</p>
             <span class="text-xs text-slate-500">ID ${item.id}</span>
           </div>
           <p class="text-xs text-slate-500">カテゴリ: ${item.item_type || '-'} / 用途: ${item.usage || '-'}</p>
-          <p class="text-xs text-slate-500">棚番: ${item.shelf || '-'} / 部署: ${item.department || '-'} / 仕入先: ${item.supplier_name || '-'}</p>
+          <p class="text-xs text-slate-500">棚番: ${item.shelf || '-'} / 部署: ${item.department || '-'} / 仕入先: ${item.supplier_name || '-'} / 単価: ${unitPriceDisplay}</p>
         `;
         row.addEventListener('click', () => {
           itemIdInput.value = row.dataset.id || '';
@@ -352,6 +360,7 @@
           itemDefaultOrderQuantityInput.value = row.dataset.defaultOrderQuantity || '1';
           itemManagementTypeSelect.value = row.dataset.managementType || '管理';
           itemSupplierSelect.value = row.dataset.supplier || '';
+          itemUnitPriceInput.value = row.dataset.unitPrice || '';
           window.scrollTo({ top: 0, behavior: 'smooth' });
         });
         return row;
@@ -393,6 +402,7 @@
           shelf: itemShelfInput.value.trim(),
           reorder_point: Number(itemReorderInput.value) || 0,
           default_order_quantity: Math.max(1, Number(itemDefaultOrderQuantityInput.value) || 1),
+          unit_price: itemUnitPriceInput.value !== '' ? Math.max(0, Number(itemUnitPriceInput.value) || 0) : null,
           management_type: itemManagementTypeSelect.value || '管理',
           supplier_id: itemSupplierSelect.value ? Number(itemSupplierSelect.value) : null,
         };
