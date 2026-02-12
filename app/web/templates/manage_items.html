@@ -54,7 +54,7 @@
           </div>
           <datalist id="item-suggestions">
             {% for item in items_data %}
-            <option value="{{ item.item_code }} - {{ item.name }}"></option>
+            <option value="{{ item.item_code }}"></option>
             {% endfor %}
           </datalist>
         </div>
@@ -151,6 +151,16 @@
             <span class="text-xs text-slate-500">単価（円）</span>
             <input id="item-unit-price" type="number" min="0" step="1" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2" />
           </label>
+          <div class="grid gap-2 md:grid-cols-2">
+            <label class="flex flex-col gap-1 text-sm">
+              <span class="text-xs text-slate-500">科目名</span>
+              <input id="item-account-name" type="text" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2" />
+            </label>
+            <label class="flex flex-col gap-1 text-sm">
+              <span class="text-xs text-slate-500">費目名</span>
+              <input id="item-expense-item-name" type="text" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2" />
+            </label>
+          </div>
           <div class="flex flex-wrap gap-2">
             <button type="submit" class="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700">保存</button>
             <button type="button" id="item-delete" class="rounded-xl border border-rose-300 px-4 py-2 text-sm text-rose-700 hover:bg-rose-50">削除</button>
@@ -211,6 +221,8 @@
       const itemManagementTypeSelect = document.getElementById('item-management-type');
       const itemSupplierSelect = document.getElementById('item-supplier');
       const itemUnitPriceInput = document.getElementById('item-unit-price');
+      const itemAccountNameInput = document.getElementById('item-account-name');
+      const itemExpenseItemNameInput = document.getElementById('item-expense-item-name');
       const itemReset = document.getElementById('item-form-reset');
       const itemDelete = document.getElementById('item-delete');
       const itemList = document.getElementById('item-list');
@@ -322,6 +334,8 @@
         itemManagementTypeSelect.value = '管理';
         itemSupplierSelect.value = '';
         itemUnitPriceInput.value = '';
+        if (itemAccountNameInput) itemAccountNameInput.value = '';
+        if (itemExpenseItemNameInput) itemExpenseItemNameInput.value = '';
       };
 
       const createItemRow = (item) => {
@@ -339,6 +353,8 @@
         row.dataset.managementType = item.management_type || '管理';
         row.dataset.supplier = item.supplier_id || '';
         row.dataset.unitPrice = item.unit_price != null ? String(item.unit_price) : '';
+        row.dataset.accountName = item.account_name || '';
+        row.dataset.expenseItemName = item.expense_item_name || '';
         const unitPriceDisplay = item.unit_price != null ? Number(item.unit_price).toLocaleString('ja-JP') : '-';
         row.innerHTML = `
           <div class="flex items-center justify-between">
@@ -347,6 +363,7 @@
           </div>
           <p class="text-xs text-slate-500">カテゴリ: ${item.item_type || '-'} / 用途: ${item.usage || '-'}</p>
           <p class="text-xs text-slate-500">棚番: ${item.shelf || '-'} / 部署: ${item.department || '-'} / 仕入先: ${item.supplier_name || '-'} / 単価: ${unitPriceDisplay}</p>
+          <p class="text-xs text-slate-500">科目: ${item.account_name || '-'} / 費目: ${item.expense_item_name || '-'}</p>
         `;
         row.addEventListener('click', () => {
           itemIdInput.value = row.dataset.id || '';
@@ -361,6 +378,8 @@
           itemManagementTypeSelect.value = row.dataset.managementType || '管理';
           itemSupplierSelect.value = row.dataset.supplier || '';
           itemUnitPriceInput.value = row.dataset.unitPrice || '';
+          if (itemAccountNameInput) itemAccountNameInput.value = row.dataset.accountName || '';
+          if (itemExpenseItemNameInput) itemExpenseItemNameInput.value = row.dataset.expenseItemName || '';
           window.scrollTo({ top: 0, behavior: 'smooth' });
         });
         return row;
@@ -403,6 +422,8 @@
           reorder_point: Number(itemReorderInput.value) || 0,
           default_order_quantity: Math.max(1, Number(itemDefaultOrderQuantityInput.value) || 1),
           unit_price: itemUnitPriceInput.value !== '' ? Math.max(0, Number(itemUnitPriceInput.value) || 0) : null,
+          account_name: itemAccountNameInput?.value?.trim() ?? '',
+          expense_item_name: itemExpenseItemNameInput?.value?.trim() ?? '',
           management_type: itemManagementTypeSelect.value || '管理',
           supplier_id: itemSupplierSelect.value ? Number(itemSupplierSelect.value) : null,
         };

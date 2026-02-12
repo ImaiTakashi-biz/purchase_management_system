@@ -122,16 +122,33 @@
               </thead>
               <tbody class="divide-y divide-slate-100">
                 {% for row in low_stock_suggestions %}
-                <tr class="candidate-row hover:bg-slate-50" data-item-id="{{ row.item_id }}" data-supplier-id="{{ row.supplier_id or '' }}" data-unit-price="{{ row.unit_price or '' }}">
+                <tr class="candidate-row hover:bg-slate-50" data-item-id="{{ row.item_id }}" data-supplier-id="{{ row.supplier_id or '' }}" data-unit-price="{{ row.unit_price if row.unit_price is not none else '' }}" data-suppliers="{{ (row.suppliers or []) | tojson | e }}">
                   <td class="px-3 py-2 text-center"><input type="checkbox" class="candidate-check" /></td>
                   <td class="px-3 py-2 font-semibold">{{ row.item_code }}</td>
                   <td class="px-3 py-2">{{ row.name }}</td>
-                  <td class="px-3 py-2">{{ row.supplier_name }}</td>
+                  <td class="px-3 py-2">
+                    {% if row.suppliers %}
+                    <div class="flex flex-col gap-0.5">
+                      <select class="candidate-supplier w-full min-w-[120px] rounded border border-slate-300 px-2 py-1 text-sm">
+                        {% for s in row.suppliers %}
+                        <option value="{{ s.supplier_id }}" data-unit-price="{{ s.unit_price if s.unit_price is not none else '' }}" {% if row.supplier_id is not none and row.supplier_id == s.supplier_id %}selected{% endif %}>{{ s.supplier_name }}</option>
+                        {% endfor %}
+                      </select>
+                      {% if (row.suppliers_with_price | default([])) | length >= 2 %}
+                      <p class="comparison-line text-xs text-slate-600 whitespace-nowrap overflow-hidden text-ellipsis max-w-[300px]">
+                        比較: {% for s in row.suppliers_with_price %}<button type="button" class="comparison-supplier-link inline text-left font-medium text-primary hover:underline cursor-pointer align-baseline rounded px-0.5 -mx-0.5 py-0.5 -my-0.5 border-0 bg-transparent" data-supplier-id="{{ s.supplier_id }}" data-unit-price="{{ s.unit_price }}">{{ s.supplier_name }} {{ "{:,}".format(s.unit_price) }}円</button>{% if not loop.last %} <span class="text-slate-400">/</span> {% endif %}{% endfor %}
+                      </p>
+                      {% endif %}
+                    </div>
+                    {% else %}
+                    <span class="text-slate-500">{{ row.supplier_name }}</span>
+                    {% endif %}
+                  </td>
                   <td class="px-3 py-2 text-right">{{ row.on_hand }}</td>
                   <td class="px-3 py-2 text-right">{{ row.reorder_point }}</td>
                   <td class="px-3 py-2 text-right candidate-unit-price">{% if row.unit_price is not none %}{{ "{:,}".format(row.unit_price) }}{% else %}—{% endif %}</td>
                   <td class="px-3 py-2 text-right"><input type="number" min="1" value="{{ row.order_quantity }}" class="order-qty w-20 rounded border border-slate-300 px-2 py-1 text-right" /></td>
-                  <td class="px-3 py-2 text-right candidate-amount" data-unit-price="{{ row.unit_price or '' }}"><span class="candidate-amount-value">—</span></td>
+                  <td class="px-3 py-2 text-right candidate-amount"><span class="candidate-amount-value">—</span></td>
                   <td class="px-3 py-2"><input type="text" class="order-note w-full rounded border border-slate-300 px-2 py-1" /></td>
                 </tr>
                 {% endfor %}
@@ -495,7 +512,7 @@
       });
       syncCandidateSelectionUi();
 
-      // 発注候補の金額を単価×注文数量で算出し表示。注文数量変更時にリアルタイム更新
+      // 発注候補の金額を単価×注文数量で算出し表示。注文数量・仕入先変更時にリアルタイム更新
       const updateCandidateAmount = (row) => {
         const unitPrice = row.dataset.unitPrice !== '' && row.dataset.unitPrice != null ? Number(row.dataset.unitPrice) : null;
         const qtyInput = row.querySelector('.order-qty');
@@ -509,6 +526,18 @@
         const amount = unitPrice * qty;
         amountCell.textContent = amount.toLocaleString('ja-JP');
       };
+      const onSupplierChange = (row, selectEl) => {
+        const opt = selectEl.options[selectEl.selectedIndex];
+        const sid = opt ? opt.value : '';
+        const unitPrice = opt && opt.dataset.unitPrice !== undefined ? opt.dataset.unitPrice : '';
+        row.dataset.supplierId = sid;
+        row.dataset.unitPrice = unitPrice;
+        const unitPriceCell = row.querySelector('.candidate-unit-price');
+        if (unitPriceCell) {
+          unitPriceCell.textContent = unitPrice !== '' && unitPrice != null ? Number(unitPrice).toLocaleString('ja-JP') : '—';
+        }
+        updateCandidateAmount(row);
+      };
       document.querySelectorAll('.candidate-row').forEach((row) => {
         updateCandidateAmount(row);
         const qtyInput = row.querySelector('.order-qty');
@@ -516,6 +545,22 @@
           qtyInput.addEventListener('input', () => updateCandidateAmount(row));
           qtyInput.addEventListener('change', () => updateCandidateAmount(row));
         }
+        const supplierSelect = row.querySelector('.candidate-supplier');
+        if (supplierSelect) {
+          supplierSelect.addEventListener('change', () => onSupplierChange(row, supplierSelect));
+        }
+        // 比較表示の仕入先クリックでドロップダウンに即反映
+        row.querySelectorAll('.comparison-supplier-link').forEach((link) => {
+          link.addEventListener('click', (e) => {
+            e.preventDefault();
+            const sid = link.dataset.supplierId;
+            const select = row.querySelector('.candidate-supplier');
+            if (select && sid !== undefined && sid !== '') {
+              select.value = sid;
+              onSupplierChange(row, select);
+            }
+          });
+        });
       });
 
       createSelectedButton?.addEventListener('click', async () => {
@@ -545,11 +590,14 @@
           const lines = selectedRows.map((row) => {
             const qtyInput = row.querySelector('.order-qty');
             const noteInput = row.querySelector('.order-note');
-            return {
+            const payload = {
               item_id: Number(row.dataset.itemId),
               quantity: Number(qtyInput?.value || 0),
               note: (noteInput?.value || '').trim(),
             };
+            if (row.dataset.supplierId) payload.supplier_id = Number(row.dataset.supplierId);
+            if (row.dataset.unitPrice !== '' && row.dataset.unitPrice != null) payload.unit_price = Number(row.dataset.unitPrice);
+            return payload;
           });
           setLoading(true, '発注を作成しています...');
           const result = await jsonRequest('/purchase-orders', {
@@ -599,7 +647,10 @@
             const noteInput = tr.querySelector('.order-note');
             const quantity = Math.max(1, parseInt(qtyInput?.value || '1', 10) || 1);
             const note = (noteInput?.value || '').trim();
-            candidateOverrides[itemId] = { quantity, note };
+            const override = { quantity, note };
+            if (tr.dataset.supplierId) override.supplier_id = Number(tr.dataset.supplierId);
+            if (tr.dataset.unitPrice !== '' && tr.dataset.unitPrice != null) override.unit_price = Number(tr.dataset.unitPrice);
+            candidateOverrides[itemId] = override;
           });
           setLoading(true, '一括発注を作成しています...');
           const result = await jsonRequest('/purchase-orders/bulk-from-low-stock', {
@@ -690,7 +741,6 @@
             previewSubject.textContent = preview.subject || '-';
             previewAttachment.textContent = preview.attachment_path || '-';
             previewBody.value = preview.body || '';
-            previewRegenerate.checked = false;
             openEmailModal();
           } catch (error) {
             showToast(error.message || String(error), 'error');

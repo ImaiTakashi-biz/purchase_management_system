@@ -103,6 +103,16 @@
             </tr>
             <tr class="bg-slate-50/70">
               <td colspan="9" class="px-3 pb-3 pt-0">
+                <div class="mb-2 flex flex-wrap items-center gap-4 text-sm">
+                  <label class="flex items-center gap-2">
+                    <span class="text-slate-500">納入日</span>
+                    <input type="date" class="delivery-date rounded border border-slate-300 px-2 py-1" data-order-id="{{ order.id }}" />
+                  </label>
+                  <label class="flex items-center gap-2">
+                    <span class="text-slate-500">納品書番号</span>
+                    <input type="text" class="delivery-note-number w-40 rounded border border-slate-300 px-2 py-1" placeholder="任意" data-order-id="{{ order.id }}" />
+                  </label>
+                </div>
                 <div class="overflow-x-auto rounded-lg border border-slate-200 bg-white">
                   <table class="min-w-full text-xs">
                     <thead class="bg-slate-50 text-slate-500">
@@ -110,6 +120,7 @@
                         <th class="px-2 py-1 text-left">品番</th>
                         <th class="px-2 py-1 text-left">品名</th>
                         <th class="px-2 py-1 text-left">メーカー</th>
+                        <th class="px-2 py-1 text-right">単価（円）</th>
                         <th class="px-2 py-1 text-right">発注数</th>
                         <th class="px-2 py-1 text-right">入荷済</th>
                         <th class="px-2 py-1 text-right">残数</th>
@@ -122,6 +133,13 @@
                         <td class="px-2 py-1">{{ line.item_code or '-' }}</td>
                         <td class="px-2 py-1">{{ line.item_name or '-' }}</td>
                         <td class="px-2 py-1">{{ line.maker or '-' }}</td>
+                        <td class="px-2 py-1 text-right">
+                          {% if line.item_id %}
+                          <input type="number" min="0" step="1" class="line-unit-price-input w-20 rounded border border-slate-300 px-2 py-1 text-right" data-line-id="{{ line.id }}" value="{{ line.unit_price if line.unit_price is not none else '' }}" placeholder="—" />
+                          {% else %}
+                          <span class="text-slate-400">—</span>
+                          {% endif %}
+                        </td>
                         <td class="px-2 py-1 text-right">{{ line.quantity }}</td>
                         <td class="px-2 py-1 text-right">{{ line.received_quantity }}</td>
                         <td class="px-2 py-1 text-right font-semibold {% if (line.remaining_quantity or 0) > 0 %}text-amber-700{% else %}text-emerald-700{% endif %}">{{ line.remaining_quantity }}</td>
@@ -467,13 +485,29 @@
             showToast('入荷対象がありません。今回入荷を入力してください。', 'error');
             return;
           }
+          const deliveryDateEl = document.querySelector(`.delivery-date[data-order-id="${orderId}"]`);
+          const deliveryNoteEl = document.querySelector(`.delivery-note-number[data-order-id="${orderId}"]`);
+          const deliveryDate = deliveryDateEl?.value?.trim() || null;
+          const deliveryNoteNumber = deliveryNoteEl?.value?.trim() || null;
+          const detailRow = button.closest('tr')?.nextElementSibling;
+          const lineUnitPrices = {};
+          detailRow?.querySelectorAll('.line-unit-price-input').forEach((input) => {
+            const lineId = input.dataset?.lineId;
+            if (!lineId) return;
+            const v = (input.value || '').trim();
+            lineUnitPrices[lineId] = v === '' ? null : (parseInt(v, 10) || null);
+          });
           const ok = await openConfirmModal(`PO #${orderId} の今回分を入庫計上します。よろしいですか？`);
           if (!ok) return;
           try {
             setLoading(true, `PO #${orderId} を入庫計上しています...`);
+            const body = { lines };
+            if (deliveryDate) body.delivery_date = deliveryDate;
+            if (deliveryNoteNumber) body.delivery_note_number = deliveryNoteNumber;
+            if (Object.keys(lineUnitPrices).length > 0) body.line_unit_prices = lineUnitPrices;
             const result = await jsonRequest(`/api/logistics/inbound/${orderId}/receive`, {
               method: 'POST',
-              body: JSON.stringify({ lines }),
+              body: JSON.stringify(body),
             });
             reloadWithToast(result.message || '入庫計上を実行しました。', 'success');
           } catch (error) {

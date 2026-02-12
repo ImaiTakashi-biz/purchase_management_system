@@ -22,7 +22,7 @@ from sqlalchemy import func, nullsfirst, select, or_
 from sqlalchemy.orm import Session, selectinload
 
 from app.db.session import init_db, get_db, SessionLocal
-from app.models.tables import AppUser, InventoryItem, InventoryTransaction, Item, PurchaseOrder, PurchaseOrderLine, PurchaseOrderStatus, Supplier, TransactionType, UserRole
+from app.models.tables import AppUser, InventoryItem, InventoryTransaction, Item, PurchaseOrder, PurchaseOrderLine, PurchaseOrderStatus, PurchaseResult, Supplier, TransactionType, UserRole
 from app.services import PurchaseOrderError, PurchaseOrderService
 from pydantic import BaseModel
 from zoneinfo import ZoneInfo
@@ -329,6 +329,8 @@ class ItemPayload(BaseModel):
     reorder_point: int = 0
     default_order_quantity: int = 1
     unit_price: Optional[int] = None  # 単価（円）。表示時は 1,000 形式
+    account_name: Optional[str] = ""  # 科目名（購入品管理・資産計上用）
+    expense_item_name: Optional[str] = ""  # 費目名（購入品管理・資産計上用）
     management_type: Optional[str] = ""  # 管理 / 管理外
     supplier_id: Optional[int] = None
 
@@ -357,6 +359,9 @@ class PurchaseOrderLineReceiptPayload(BaseModel):
 
 class ReceivePurchaseOrderPayload(BaseModel):
     lines: List[PurchaseOrderLineReceiptPayload] = []
+    delivery_date: Optional[str] = None
+    delivery_note_number: Optional[str] = None
+    line_unit_prices: Optional[Dict[str, Optional[int]]] = None
 
 
 class IssueRecordResponse(BaseModel):
@@ -379,6 +384,8 @@ class PurchaseOrderLinePayload(BaseModel):
     note: Optional[str] = ""
     item_name_free: Optional[str] = ""
     maker: Optional[str] = ""
+    supplier_id: Optional[int] = None  # 品番×仕入先選択（Phase2）
+    unit_price: Optional[int] = None   # 発注時単価（item_suppliers 自動登録用）
 
 
 class CreatePurchaseOrderPayload(BaseModel):
@@ -411,6 +418,21 @@ class ReplyDueDatePayload(BaseModel):
 class UpdatePurchaseOrderStatusPayload(BaseModel):
     status: str
     updated_by: Optional[str] = ""
+
+
+class PurchaseResultUpdatePayload(BaseModel):
+    """購入実績1件の更新用。未指定の項目は変更しない（null は空に更新）。"""
+    delivery_date: Optional[str] = None
+    supplier_id: Optional[int] = None
+    delivery_note_number: Optional[str] = None
+    quantity: Optional[int] = None
+    unit_price: Optional[int] = None
+    amount: Optional[int] = None
+    purchase_month: Optional[str] = None
+    account_name: Optional[str] = None
+    expense_item_name: Optional[str] = None
+    purchaser_name: Optional[str] = None
+    note: Optional[str] = None
 
 
 def model_to_dict(model: BaseModel) -> Dict[str, object]:
@@ -749,6 +771,7 @@ BASE_NAV_LINKS = [
     {'label': '在庫管理', 'href': '/inventory'},
     {'label': '発注管理', 'href': '/orders'},
     {'label': '入出庫管理', 'href': '/logistics'},
+    {'label': '購入品管理', 'href': '/purchase-results'},
     {'label': 'データ管理', 'href': '/manage/suppliers'},
     {'label': '履歴', 'href': '/history'},
 ]
@@ -767,8 +790,8 @@ def build_nav_links(active_href: str, current_user: Optional[Dict[str, Any]] = N
         if link["href"] == "/manage/suppliers" and not is_manager_or_higher_user(current_user):
             # データ管理は manager 以上のみ表示
             continue
-        if link["href"] in ("/orders", "/logistics") and not is_manager_or_higher_user(current_user):
-            # 発注管理・入出庫管理は manager 以上のみ表示（一般ユーザーには非表示）
+        if link["href"] in ("/orders", "/logistics", "/purchase-results") and not is_manager_or_higher_user(current_user):
+            # 発注管理・入出庫管理・購入品管理は manager 以上のみ表示
             continue
         links.append(
             {
@@ -1778,11 +1801,17 @@ def receive_purchase_order_to_inventory(
     line_receipts: Dict[int, int] = {}
     for row in payload.lines:
         line_receipts[int(row.line_id)] = int(row.quantity)
+    line_unit_prices: Optional[Dict[int, Optional[int]]] = None
+    if payload.line_unit_prices:
+        line_unit_prices = {int(k): v for k, v in payload.line_unit_prices.items()}
     try:
         result = service.receive_order_partial(
             order_id=order_id,
             updated_by=updated_by,
             line_receipts=line_receipts or None,
+            delivery_date=payload.delivery_date,
+            delivery_note_number=payload.delivery_note_number,
+            line_unit_prices=line_unit_prices,
         )
     except PurchaseOrderError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -2053,6 +2082,8 @@ def serialize_items_for_manage(items: List[Item]) -> List[Dict[str, object]]:
             "reorder_point": item.reorder_point or 0,
             "default_order_quantity": getattr(item, "default_order_quantity", 1) or 1,
             "unit_price": getattr(item, "unit_price", None),
+            "account_name": getattr(item, "account_name", None) or "",
+            "expense_item_name": getattr(item, "expense_item_name", None) or "",
             "management_type": item.management_type or "",
             "supplier_id": item.supplier_id,
             "supplier_name": item.supplier.name if item.supplier else "",
@@ -2146,6 +2177,231 @@ def manage_items(
         'current_user': current_user,
     }
     return templates.TemplateResponse('manage_items.html', context)
+
+
+def _query_purchase_results_filtered(
+    db: Session,
+    delivery_date_from: Optional[str] = None,
+    delivery_date_to: Optional[str] = None,
+    purchase_month: Optional[str] = None,
+    supplier_id: Optional[int] = None,
+    item_code: Optional[str] = None,
+):
+    stmt = (
+        select(PurchaseResult)
+        .options(selectinload(PurchaseResult.item), selectinload(PurchaseResult.supplier))
+        .order_by(PurchaseResult.delivery_date.desc().nulls_last(), PurchaseResult.id.desc())
+    )
+    if delivery_date_from and delivery_date_from.strip():
+        try:
+            stmt = stmt.where(PurchaseResult.delivery_date >= date.fromisoformat(delivery_date_from.strip()))
+        except ValueError:
+            pass
+    if delivery_date_to and delivery_date_to.strip():
+        try:
+            stmt = stmt.where(PurchaseResult.delivery_date <= date.fromisoformat(delivery_date_to.strip()))
+        except ValueError:
+            pass
+    if purchase_month and purchase_month.strip() and len(purchase_month.strip()) == 4:
+        stmt = stmt.where(PurchaseResult.purchase_month == purchase_month.strip())
+    if supplier_id is not None:
+        stmt = stmt.where(PurchaseResult.supplier_id == supplier_id)
+    if item_code and item_code.strip():
+        stmt = stmt.join(Item, PurchaseResult.item_id == Item.id).where(
+            or_(Item.item_code.ilike(f"%{item_code.strip()}%"), Item.name.ilike(f"%{item_code.strip()}%"))
+        )
+    return db.scalars(stmt).unique().all()
+
+
+@app.get('/purchase-results', response_class=HTMLResponse)
+def purchase_results_page(
+    request: Request,
+    delivery_date_from: Optional[str] = Query(None),
+    delivery_date_to: Optional[str] = Query(None),
+    purchase_month: Optional[str] = Query(None),
+    supplier_id: Optional[int] = Query(None),
+    item_code: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: Dict[str, Any] = Depends(require_manager_user),
+) -> HTMLResponse:
+    results = _query_purchase_results_filtered(
+        db,
+        delivery_date_from=delivery_date_from,
+        delivery_date_to=delivery_date_to,
+        purchase_month=purchase_month,
+        supplier_id=supplier_id,
+        item_code=item_code,
+    )
+    suppliers = db.scalars(select(Supplier).order_by(Supplier.name.asc())).all()
+    rows: List[Dict[str, Any]] = []
+    for r in results:
+        rows.append({
+            "id": r.id,
+            "delivery_date": r.delivery_date.isoformat() if r.delivery_date else "",
+            "supplier_id": r.supplier_id,
+            "supplier_name": r.supplier.name if r.supplier else "",
+            "delivery_note_number": r.delivery_note_number or "",
+            "item_code": r.item.item_code if r.item else "",
+            "item_name": r.item.name if r.item else "",
+            "quantity": r.quantity,
+            "unit_price": r.unit_price,
+            "amount": r.amount,
+            "purchase_month": r.purchase_month or "",
+            "account_name": r.account_name or "",
+            "expense_item_name": r.expense_item_name or "",
+            "purchaser_name": r.purchaser_name or "",
+            "note": r.note or "",
+        })
+    context = {
+        "request": request,
+        "nav_links": build_nav_links("/purchase-results", current_user),
+        "results": rows,
+        "suppliers": suppliers,
+        "filters": {
+            "delivery_date_from": delivery_date_from or "",
+            "delivery_date_to": delivery_date_to or "",
+            "purchase_month": purchase_month or "",
+            "supplier_id": supplier_id,
+            "item_code": item_code or "",
+        },
+        "now": datetime.now(JST_ZONE),
+        "current_user": current_user,
+    }
+    return templates.TemplateResponse("purchase_results.html", context)
+
+
+@app.get('/purchase-results/csv')
+def purchase_results_csv(
+    delivery_date_from: Optional[str] = Query(None),
+    delivery_date_to: Optional[str] = Query(None),
+    purchase_month: Optional[str] = Query(None),
+    supplier_id: Optional[int] = Query(None),
+    item_code: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: Dict[str, Any] = Depends(require_manager_user),
+) -> Response:
+    results = _query_purchase_results_filtered(
+        db,
+        delivery_date_from=delivery_date_from,
+        delivery_date_to=delivery_date_to,
+        purchase_month=purchase_month,
+        supplier_id=supplier_id,
+        item_code=item_code,
+    )
+    import csv
+    import io
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow([
+        "納入日", "購入先", "納品書番号", "品番", "品名", "数量", "単価", "金額",
+        "購入月", "科目名", "費目名", "購入者", "備考",
+    ])
+    for r in results:
+        writer.writerow([
+            r.delivery_date.isoformat() if r.delivery_date else "",
+            r.supplier.name if r.supplier else "",
+            r.delivery_note_number or "",
+            r.item.item_code if r.item else "",
+            r.item.name if r.item else "",
+            r.quantity,
+            r.unit_price if r.unit_price is not None else "",
+            r.amount if r.amount is not None else "",
+            r.purchase_month or "",
+            r.account_name or "",
+            r.expense_item_name or "",
+            r.purchaser_name or "",
+            r.note or "",
+        ])
+    body = buf.getvalue()
+    return Response(
+        content=body.encode("utf-8-sig"),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": "attachment; filename=purchase_results.csv"},
+    )
+
+
+@app.patch('/api/purchase-results/{result_id}')
+def update_purchase_result(
+    result_id: int,
+    payload: PurchaseResultUpdatePayload,
+    db: Session = Depends(get_db),
+    current_user: Dict[str, Any] = Depends(require_manager_user),
+) -> Dict[str, object]:
+    """購入実績1件を更新する。manager 以上のみ実行可能。"""
+    _ = current_user
+    row = db.get(PurchaseResult, result_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="購入実績が見つかりません。")
+    if payload.delivery_date is not None:
+        if payload.delivery_date.strip() == "":
+            row.delivery_date = None
+        else:
+            try:
+                row.delivery_date = date.fromisoformat(payload.delivery_date.strip())
+            except ValueError:
+                raise HTTPException(status_code=400, detail="納入日の形式が不正です。")
+    if payload.supplier_id is not None:
+        sup = db.get(Supplier, payload.supplier_id)
+        if not sup:
+            raise HTTPException(status_code=400, detail="指定した仕入先が存在しません。")
+        row.supplier_id = payload.supplier_id
+    if payload.delivery_note_number is not None:
+        row.delivery_note_number = (payload.delivery_note_number.strip() or None)
+    if payload.quantity is not None:
+        if payload.quantity < 0:
+            raise HTTPException(status_code=400, detail="数量は0以上で指定してください。")
+        row.quantity = payload.quantity
+    if payload.unit_price is not None:
+        row.unit_price = payload.unit_price if payload.unit_price >= 0 else None
+    if payload.amount is not None:
+        row.amount = payload.amount if payload.amount >= 0 else None
+    if payload.purchase_month is not None:
+        row.purchase_month = (payload.purchase_month.strip() or None)
+    if payload.account_name is not None:
+        row.account_name = (payload.account_name.strip() or None)
+    if payload.expense_item_name is not None:
+        row.expense_item_name = (payload.expense_item_name.strip() or None)
+    if payload.purchaser_name is not None:
+        row.purchaser_name = (payload.purchaser_name.strip() or None)
+    if payload.note is not None:
+        row.note = (payload.note.strip() or None)
+    db.commit()
+    db.refresh(row)
+    return {"ok": True, "id": row.id}
+
+
+@app.get('/manage/purchase-results', response_class=RedirectResponse)
+def redirect_manage_purchase_results_to_purchase_results(
+    request: Request,
+    delivery_date_from: Optional[str] = Query(None),
+    delivery_date_to: Optional[str] = Query(None),
+    purchase_month: Optional[str] = Query(None),
+    supplier_id: Optional[int] = Query(None),
+    item_code: Optional[str] = Query(None),
+) -> RedirectResponse:
+    """旧URL: データ管理内の購入品管理 → 独立ページへリダイレクト"""
+    params = []
+    if delivery_date_from:
+        params.append(f"delivery_date_from={quote_plus(delivery_date_from)}")
+    if delivery_date_to:
+        params.append(f"delivery_date_to={quote_plus(delivery_date_to)}")
+    if purchase_month:
+        params.append(f"purchase_month={quote_plus(purchase_month)}")
+    if supplier_id is not None:
+        params.append(f"supplier_id={supplier_id}")
+    if item_code:
+        params.append(f"item_code={quote_plus(item_code)}")
+    qs = "&".join(params)
+    url = "/purchase-results" + ("?" + qs if qs else "")
+    return RedirectResponse(url=url, status_code=302)
+
+
+@app.get('/manage/purchase-results/csv', response_class=RedirectResponse)
+def redirect_manage_purchase_results_csv(request: Request) -> RedirectResponse:
+    """旧URL: CSV → 新URLへリダイレクト（クエリは維持）"""
+    qs = request.url.query
+    url = "/purchase-results/csv" + ("?" + qs if qs else "")
+    return RedirectResponse(url=url, status_code=302)
 
 
 @app.get('/manage/email-settings', response_class=HTMLResponse)
@@ -2640,6 +2896,8 @@ def create_item(
         reorder_point=max(0, payload.reorder_point),
         default_order_quantity=max(1, payload.default_order_quantity),
         unit_price=payload.unit_price if payload.unit_price is not None else None,
+        account_name=(payload.account_name or "").strip() or None,
+        expense_item_name=(payload.expense_item_name or "").strip() or None,
         management_type=management_type,
         supplier_id=supplier.id if supplier else None,
     )
@@ -2686,6 +2944,8 @@ def update_item(
     item.reorder_point = max(0, payload.reorder_point)
     item.default_order_quantity = max(1, payload.default_order_quantity)
     item.unit_price = payload.unit_price if payload.unit_price is not None else None
+    item.account_name = (payload.account_name or "").strip() or None
+    item.expense_item_name = (payload.expense_item_name or "").strip() or None
     management_type = (payload.management_type or '').strip()
     if management_type in ('管理', '管理外'):
         item.management_type = management_type
@@ -2747,6 +3007,8 @@ def search_items(
             'reorder_point': item.reorder_point or 0,
             'default_order_quantity': getattr(item, 'default_order_quantity', 1) or 1,
             'unit_price': getattr(item, 'unit_price', None),
+            'account_name': getattr(item, 'account_name', None) or '',
+            'expense_item_name': getattr(item, 'expense_item_name', None) or '',
             'management_type': item.management_type or '',
             'supplier_id': item.supplier_id,
             'supplier_name': item.supplier.name if item.supplier else '',

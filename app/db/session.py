@@ -93,6 +93,8 @@ def init_db() -> None:
         _ensure_column(conn, "items", "management_type", "VARCHAR(32)")
         _ensure_column(conn, "items", "default_order_quantity", "INTEGER NOT NULL DEFAULT 1")
         _ensure_column(conn, "items", "unit_price", "INTEGER")
+        _ensure_column(conn, "items", "account_name", "VARCHAR(128)")
+        _ensure_column(conn, "items", "expense_item_name", "VARCHAR(128)")
         _ensure_column(conn, "suppliers", "mobile_number", "VARCHAR(64)")
         _ensure_column(conn, "suppliers", "phone_number", "VARCHAR(64)")
         _ensure_column(conn, "suppliers", "email_cc", "VARCHAR(256)")
@@ -101,6 +103,14 @@ def init_db() -> None:
         _ensure_column(conn, "suppliers", "fax_number", "VARCHAR(64)")
         _ensure_column(conn, "suppliers", "notes", "TEXT")
         _ensure_column(conn, "purchase_order_lines", "received_quantity", "INTEGER NOT NULL DEFAULT 0")
+        # 既存の items.supplier_id + unit_price を item_suppliers に1件ずつ投入（重複は無視）
+        if _table_exists(conn, "item_suppliers"):
+            conn.execute(
+                text(
+                    "INSERT OR IGNORE INTO item_suppliers (item_id, supplier_id, unit_price) "
+                    "SELECT id, supplier_id, unit_price FROM items WHERE supplier_id IS NOT NULL"
+                )
+            )
         conn.execute(
             text(
                 "UPDATE suppliers "

@@ -25,12 +25,15 @@ from app.models.tables import (
     InventoryItem,
     InventoryTransaction,
     Item,
+    ItemSupplier,
     PurchaseOrder,
     PurchaseOrderDocument,
     PurchaseOrderLine,
+    PurchaseResult,
     PurchaseOrderStatus,
     Supplier,
     TransactionType,
+    UnitPriceHistory,
 )
 
 DEFAULT_NAS_ROOT = r"\\192.168.1.200\共有\dev_tools\発注管理システム\注文書"
@@ -114,12 +117,11 @@ class PurchaseOrderService:
 
     def build_low_stock_candidates(self, department: str = "") -> list[dict[str, Any]]:
         selected_department = (department or "").strip()
-        # 確定以降（CONFIRMED/SENT/WAITING/RECEIVED）の発注に含まれる品目は候補から除外する。取消時は再表示される。
+        # 確定・送信済・入荷待ち（CONFIRMED/SENT/WAITING）の発注に含まれる品目は候補から除外。納品済は除外しない（入庫後は在庫不足で再発注候補に表示）。取消時は再表示。
         confirmed_or_later = (
             PurchaseOrderStatus.CONFIRMED.value,
             PurchaseOrderStatus.SENT.value,
             PurchaseOrderStatus.WAITING.value,
-            PurchaseOrderStatus.RECEIVED.value,
         )
         excluded_item_ids_stmt = (
             select(PurchaseOrderLine.item_id)
@@ -130,9 +132,16 @@ class PurchaseOrderService:
         )
         excluded_item_ids = set(self.db.scalars(excluded_item_ids_stmt).all())
 
+        # 仕入先マスタを一括取得（発注候補で「未登録の仕入先」も選択可能にするため）
+        all_suppliers = self.db.scalars(select(Supplier).order_by(Supplier.name.asc())).all()
+
         stmt = (
             select(Item)
-            .options(selectinload(Item.inventory_item), selectinload(Item.supplier))
+            .options(
+                selectinload(Item.inventory_item),
+                selectinload(Item.supplier),
+                selectinload(Item.item_suppliers).selectinload(ItemSupplier.supplier),
+            )
             .order_by(Item.item_code.asc())
         )
         items = self.db.scalars(stmt).all()
@@ -152,7 +161,39 @@ class PurchaseOrderService:
             if selected_department and item_dept != selected_department:
                 continue
 
-            supplier = item.supplier
+            # 登録済み: item_suppliers の単価一覧。無ければ items.supplier + items.unit_price を1件
+            registered: list[dict[str, Any]] = []
+            for is_row in sorted(item.item_suppliers or [], key=lambda x: (x.supplier.name or "", x.supplier_id)):
+                if is_row.supplier:
+                    registered.append({
+                        "supplier_id": is_row.supplier_id,
+                        "supplier_name": is_row.supplier.name or "未設定",
+                        "unit_price": getattr(is_row, "unit_price", None),
+                    })
+            if not registered and item.supplier:
+                registered.append({
+                    "supplier_id": item.supplier_id,
+                    "supplier_name": item.supplier.name or "未設定",
+                    "unit_price": getattr(item, "unit_price", None),
+                })
+            registered_ids = {s["supplier_id"] for s in registered}
+            # その他: 仕入先マスタのうち未登録分を単価 null で追加
+            others = [
+                {"supplier_id": s.id, "supplier_name": s.name or "未設定", "unit_price": None}
+                for s in all_suppliers
+                if s.id not in registered_ids
+            ]
+            suppliers = registered + others
+            # 単価の安い順に並べ、デフォルト表示を最安仕入先にする（単価未設定は末尾）
+            _max_int = 999_999_999
+            suppliers = sorted(
+                suppliers,
+                key=lambda s: (s.get("unit_price") if s.get("unit_price") is not None else _max_int, s.get("supplier_name") or ""),
+            )
+
+            first = suppliers[0] if suppliers else {}
+            # 単価比較表示用：単価登録済みの仕入先のみ（未登録は表示しない）
+            suppliers_with_price = [s for s in suppliers if s.get("unit_price") is not None]
             results.append(
                 {
                     "item_id": item.id,
@@ -160,14 +201,16 @@ class PurchaseOrderService:
                     "name": item.name,
                     "department": item.department or "未設定",
                     "maker": item.manufacturer or "",
-                    "supplier_id": supplier.id if supplier else None,
-                    "supplier_name": supplier.name if supplier else "未設定",
+                    "supplier_id": first.get("supplier_id"),
+                    "supplier_name": first.get("supplier_name", "未設定"),
+                    "unit_price": first.get("unit_price"),
+                    "suppliers": suppliers,
+                    "suppliers_with_price": suppliers_with_price,
                     "on_hand": on_hand,
                     "reorder_point": reorder,
                     "gap": on_hand - reorder,
                     "gap_label": f"{on_hand - reorder:+d}",
                     "order_quantity": max(1, getattr(item, "default_order_quantity", 1) or 1),
-                    "unit_price": getattr(item, "unit_price", None),
                     "note": "",
                 }
             )
@@ -179,7 +222,7 @@ class PurchaseOrderService:
             .options(
                 selectinload(PurchaseOrder.supplier),
                 selectinload(PurchaseOrder.document),
-                selectinload(PurchaseOrder.lines).selectinload(PurchaseOrderLine.item),
+                selectinload(PurchaseOrder.lines).selectinload(PurchaseOrderLine.item).selectinload(Item.item_suppliers),
             )
             .order_by(PurchaseOrder.created_at.desc())
         )
@@ -205,23 +248,36 @@ class PurchaseOrderService:
                     "issued_date": order.issued_date.isoformat() if order.issued_date else "",
                     "pdf_path": order.document.pdf_path if order.document else "",
                     "lines": [
-                        {
-                            "id": line.id,
-                            "item_id": line.item_id,
-                            "item_code": line.item.item_code if line.item else "",
-                            "item_name": line.item.name if line.item else (line.item_name_free or ""),
-                            "maker": line.maker or "",
-                            "quantity": line.quantity,
-                            "received_quantity": max(0, int(line.received_quantity or 0)),
-                            "remaining_quantity": max(0, int(line.quantity or 0) - int(line.received_quantity or 0)),
-                            "vendor_reply_due_date": line.vendor_reply_due_date.isoformat() if line.vendor_reply_due_date else "",
-                            "note": line.note or "",
-                        }
+                        self._line_with_unit_price(line, order.supplier_id)
                         for line in order.lines
                     ],
                 }
             )
         return payload
+
+    def _line_with_unit_price(self, line: PurchaseOrderLine, supplier_id: Optional[int]) -> dict[str, Any]:
+        """発注明細の表示用辞書に単価を付与（item_suppliers 優先、なければ item.unit_price）。"""
+        unit_price: Optional[int] = None
+        if line.item and supplier_id and line.item.item_suppliers:
+            for is_row in line.item.item_suppliers:
+                if is_row.supplier_id == supplier_id:
+                    unit_price = getattr(is_row, "unit_price", None)
+                    break
+        if unit_price is None and line.item:
+            unit_price = getattr(line.item, "unit_price", None)
+        return {
+            "id": line.id,
+            "item_id": line.item_id,
+            "item_code": line.item.item_code if line.item else "",
+            "item_name": line.item.name if line.item else (line.item_name_free or ""),
+            "maker": line.maker or "",
+            "quantity": line.quantity,
+            "received_quantity": max(0, int(line.received_quantity or 0)),
+            "remaining_quantity": max(0, int(line.quantity or 0) - int(line.received_quantity or 0)),
+            "vendor_reply_due_date": line.vendor_reply_due_date.isoformat() if line.vendor_reply_due_date else "",
+            "note": line.note or "",
+            "unit_price": unit_price,
+        }
 
     def create_order(
         self,
@@ -242,20 +298,40 @@ class PurchaseOrderService:
             note = (raw.get("note") or "").strip()
             item_name_free = (raw.get("item_name_free") or "").strip()
             maker = (raw.get("maker") or "").strip()
+            line_supplier_id_raw = raw.get("supplier_id")
+            line_supplier_id = int(line_supplier_id_raw) if line_supplier_id_raw is not None else None
+            line_unit_price = raw.get("unit_price")
+            if line_unit_price is not None:
+                line_unit_price = int(line_unit_price)
 
             if quantity <= 0:
                 raise PurchaseOrderError("発注数は1以上で指定してください。")
 
             item: Optional[Item] = None
             if item_id is not None:
-                item = self.db.scalar(select(Item).filter(Item.id == int(item_id)).options(selectinload(Item.supplier)))
+                item = self.db.scalar(
+                    select(Item)
+                    .filter(Item.id == int(item_id))
+                    .options(selectinload(Item.supplier), selectinload(Item.item_suppliers))
+                )
                 if not item:
                     raise PurchaseOrderError(f"品目ID {item_id} が存在しません。")
-                if not item.supplier_id:
-                    raise PurchaseOrderError(f"品目 {item.item_code} は仕入先未設定のため発注できません。")
-                supplier_ids.add(item.supplier_id)
+                # 明細で仕入先を指定していればそれを使用。未指定時は品目の代表仕入先（未設定なら発注不可）
+                effective_supplier_id = line_supplier_id if line_supplier_id is not None else item.supplier_id
+                if not effective_supplier_id:
+                    raise PurchaseOrderError(f"品目 {item.item_code} は仕入先を選択してください。")
+                supplier_ids.add(effective_supplier_id)
                 if not resolved_department and item.department:
                     resolved_department = item.department
+                # 単価: 明細指定 → item_suppliers の該当 → items.unit_price
+                unit_price = line_unit_price
+                if unit_price is None and item.item_suppliers:
+                    for is_row in item.item_suppliers:
+                        if is_row.supplier_id == effective_supplier_id:
+                            unit_price = getattr(is_row, "unit_price", None)
+                            break
+                if unit_price is None:
+                    unit_price = getattr(item, "unit_price", None)
                 normalized_lines.append(
                     {
                         "item_id": item.id,
@@ -263,6 +339,8 @@ class PurchaseOrderService:
                         "maker": maker or (item.manufacturer or ""),
                         "quantity": quantity,
                         "note": note,
+                        "supplier_id": effective_supplier_id,
+                        "unit_price": unit_price,
                     }
                 )
             else:
@@ -319,7 +397,7 @@ class PurchaseOrderService:
             self.db.add(
                 PurchaseOrderLine(
                     purchase_order_id=order.id,
-                    item_id=line_data["item_id"],
+                    item_id=line_data.get("item_id"),
                     item_name_free=line_data["item_name_free"],
                     maker=line_data["maker"],
                     quantity=line_data["quantity"],
@@ -344,36 +422,60 @@ class PurchaseOrderService:
         candidate_overrides: dict[str, dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         candidates = self.build_low_stock_candidates(department)
+        overrides = candidate_overrides or {}
+        # 行ごとに有効な仕入先を決定し、仕入先ごとにグループ化
         grouped: dict[int, list[dict[str, Any]]] = {}
         for row in candidates:
-            supplier_id = row.get("supplier_id")
-            if not supplier_id:
+            item_id = row["item_id"]
+            key = str(item_id)
+            o = overrides.get(key, {})
+            effective_supplier_id = o.get("supplier_id")
+            if effective_supplier_id is not None:
+                effective_supplier_id = int(effective_supplier_id)
+            if effective_supplier_id is None:
+                effective_supplier_id = row.get("supplier_id")
+            if not effective_supplier_id:
                 continue
-            grouped.setdefault(int(supplier_id), []).append(row)
+            effective_supplier_id = int(effective_supplier_id)
+            row_with_effective = {**row, "_effective_supplier_id": effective_supplier_id}
+            grouped.setdefault(effective_supplier_id, []).append(row_with_effective)
 
-        overrides = candidate_overrides or {}
         created_orders: list[int] = []
         created_count = 0
         reused_count = 0
-        for _, rows in grouped.items():
+        for supplier_id, rows in grouped.items():
             if not rows:
                 continue
             lines = []
             for row in rows:
                 item_id = row["item_id"]
                 key = str(item_id)
+                sid = row["_effective_supplier_id"]
                 if key in overrides:
                     o = overrides[key]
                     qty = int(o.get("quantity") or 0)
                     note = str(o.get("note") or "").strip()
+                    unit_price = o.get("unit_price")
+                    if unit_price is not None:
+                        unit_price = int(unit_price)
                 else:
                     qty = row["order_quantity"]
                     note = row.get("note") or ""
+                    unit_price = None
+                if unit_price is None and row.get("suppliers"):
+                    for s in row["suppliers"]:
+                        if s.get("supplier_id") == sid:
+                            unit_price = s.get("unit_price")
+                            break
+                if unit_price is None:
+                    unit_price = row.get("unit_price")
                 lines.append(
                     {
                         "item_id": item_id,
                         "quantity": max(1, qty),
                         "note": note,
+                        "supplier_id": sid,
+                        "unit_price": unit_price,
                     }
                 )
             result = self.create_order(
@@ -635,13 +737,40 @@ class PurchaseOrderService:
                 sent_at=datetime.utcnow(),
                 to_recipients=to_address,
                 cc_recipients=cc_address,
-                subject=preview["subject"],
-                body=preview["body"],
+                subject=(preview.get("subject") or ""),
+                body=(preview.get("body") if preview.get("body") is not None else ""),
                 attachment_path=str(attachment_path),
                 success=True,
                 error_message=None,
             )
         )
+        # メール送信完了時に、当該発注の品番×仕入先が未登録なら item_suppliers に新規登録（単価は未入力で追加。他仕入先で同品番があっても当該仕入先で新規登録）
+        sid = order.supplier_id
+        if sid:
+            lines = self.db.scalars(
+                select(PurchaseOrderLine)
+                .filter(PurchaseOrderLine.purchase_order_id == order.id)
+                .where(PurchaseOrderLine.item_id.isnot(None))
+            ).all()
+            for line in lines:
+                if not line.item_id:
+                    continue
+                existing = self.db.scalar(
+                    select(ItemSupplier).filter(
+                        ItemSupplier.item_id == line.item_id,
+                        ItemSupplier.supplier_id == sid,
+                    )
+                )
+                if existing:
+                    continue
+                self.db.add(
+                    ItemSupplier(
+                        item_id=line.item_id,
+                        supplier_id=sid,
+                        unit_price=None,
+                    )
+                )
+        self.db.flush()
         self.db.commit()
 
         return {
@@ -716,6 +845,9 @@ class PurchaseOrderService:
         order_id: int,
         updated_by: str,
         line_receipts: Optional[dict[int, int]] = None,
+        delivery_date: Optional[str] = None,
+        delivery_note_number: Optional[str] = None,
+        line_unit_prices: Optional[dict[int, Optional[int]]] = None,
     ) -> dict[str, Any]:
         order = self._load_order_with_relations(order_id)
         if not order:
@@ -726,6 +858,14 @@ class PurchaseOrderService:
             raise PurchaseOrderError("この発注は既に入庫完了です。")
         if order.status not in {PurchaseOrderStatus.SENT.value, PurchaseOrderStatus.WAITING.value}:
             raise PurchaseOrderError("入庫計上は送信済み/入庫待ちの発注のみ実行できます。")
+
+        delivery_date_parsed: Optional[date] = None
+        if delivery_date and (delivery_date or "").strip():
+            try:
+                delivery_date_parsed = date.fromisoformat((delivery_date or "").strip())
+            except ValueError:
+                pass
+        note_trimmed = (delivery_note_number or "").strip() or None
 
         normalized_map: dict[int, int] = {}
         if line_receipts:
@@ -742,6 +882,7 @@ class PurchaseOrderService:
                 raise PurchaseOrderError(f"この発注に存在しない明細IDです: {', '.join(str(v) for v in unknown_line_ids)}")
 
         processed_count = 0
+        processed_lines: list[tuple[PurchaseOrderLine, int]] = []
         for line in order.lines:
             ordered = int(line.quantity or 0)
             received = max(0, int(line.received_quantity or 0))
@@ -765,6 +906,8 @@ class PurchaseOrderService:
 
             line.received_quantity = received + incoming
             processed_count += 1
+            if line.item_id and incoming > 0:
+                processed_lines.append((line, incoming))
 
             if line.item_id:
                 inventory = self.db.scalar(select(InventoryItem).filter(InventoryItem.item_id == line.item_id))
@@ -793,6 +936,76 @@ class PurchaseOrderService:
             for line in order.lines
         )
         order.status = PurchaseOrderStatus.RECEIVED.value if all_received else PurchaseOrderStatus.WAITING.value
+
+        # 単価オーバーライドがあれば unit_price_history に記録し item_suppliers を更新。購入実績へ明細単位で挿入。
+        line_unit_prices_norm: dict[int, Optional[int]] = {}
+        if line_unit_prices:
+            for k, v in line_unit_prices.items():
+                line_unit_prices_norm[int(k)] = int(v) if v is not None else None
+
+        if order.supplier_id and processed_lines:
+            purchase_month = delivery_date_parsed.strftime("%y%m") if delivery_date_parsed else None
+            purchaser_name = (order.ordered_by_user or "").strip() or None
+            for line, incoming in processed_lines:
+                item = line.item
+                if not item:
+                    continue
+                is_row = self.db.scalar(
+                    select(ItemSupplier).filter(
+                        ItemSupplier.item_id == line.item_id,
+                        ItemSupplier.supplier_id == order.supplier_id,
+                    )
+                )
+                current_price: Optional[int] = None
+                if is_row:
+                    current_price = getattr(is_row, "unit_price", None)
+                if current_price is None:
+                    current_price = getattr(item, "unit_price", None)
+                override_price = line_unit_prices_norm.get(line.id)
+                if override_price is not None and override_price != current_price:
+                    self.db.add(
+                        UnitPriceHistory(
+                            item_id=line.item_id,
+                            supplier_id=order.supplier_id,
+                            old_unit_price=current_price,
+                            new_unit_price=override_price,
+                            changed_by=(updated_by or "").strip() or None,
+                            source="入庫計上",
+                            reference_id=line.id,
+                        )
+                    )
+                    if is_row:
+                        is_row.unit_price = override_price
+                    else:
+                        self.db.add(
+                            ItemSupplier(
+                                item_id=line.item_id,
+                                supplier_id=order.supplier_id,
+                                unit_price=override_price,
+                            )
+                        )
+                    current_price = override_price
+                unit_price = current_price
+                amount = (unit_price or 0) * incoming
+                self.db.add(
+                    PurchaseResult(
+                        delivery_date=delivery_date_parsed,
+                        supplier_id=order.supplier_id,
+                        delivery_note_number=note_trimmed,
+                        item_id=line.item_id,
+                        quantity=incoming,
+                        unit_price=unit_price,
+                        amount=amount if unit_price is not None else None,
+                        purchase_month=purchase_month,
+                        account_name=getattr(item, "account_name", None) or None,
+                        expense_item_name=getattr(item, "expense_item_name", None) or None,
+                        purchaser_name=purchaser_name,
+                        note=line.note,
+                        source_order_id=order.id,
+                        source_line_id=line.id,
+                    )
+                )
+
         self.db.commit()
 
         return {
