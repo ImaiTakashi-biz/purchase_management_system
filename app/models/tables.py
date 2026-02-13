@@ -206,6 +206,7 @@ class PurchaseOrderLine(Base):
     quantity = Column(Integer, nullable=False)
     received_quantity = Column(Integer, nullable=False, default=0)
     vendor_reply_due_date = Column(Date, nullable=True)
+    usage_destination = Column(String(256), nullable=True)  # 使用先（管理外依頼取り込み時など）
     note = Column(Text, nullable=True)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(
@@ -249,15 +250,58 @@ class EmailSendLog(Base):
     order = relationship("PurchaseOrder", back_populates="email_logs")
 
 
+class UnmanagedOrderRequestStatus(str, Enum):
+    """管理外発注依頼のステータス"""
+    PENDING = "PENDING"      # 未処理
+    CONVERTED = "CONVERTED"  # 発注に取り込み済み
+    REJECTED = "REJECTED"    # 却下
+
+
+class UnmanagedOrderRequest(Base):
+    """管理外品目の発注依頼。一般ユーザー・管理者が登録し、管理者が発注に取り込む。"""
+    __tablename__ = "unmanaged_order_requests"
+
+    id = Column(Integer, primary_key=True, index=True)
+    requested_at = Column(Date, nullable=False)  # 依頼日
+    requested_department = Column(String(128), nullable=True)  # 依頼部署
+    requested_by = Column(String(128), nullable=True)  # 依頼者
+    item_id = Column(ForeignKey("items.id"), nullable=True)  # マスタにある場合
+    item_code_free = Column(String(256), nullable=True)  # マスタにない場合の品番・品名
+    manufacturer = Column(String(256), nullable=True)  # メーカー名
+    quantity = Column(Integer, nullable=False)
+    usage_destination = Column(String(256), nullable=True)  # 使用先
+    note = Column(Text, nullable=True)  # 備考
+    vendor_reply_due_date = Column(Date, nullable=True)  # 希望納期
+    status = Column(String(32), nullable=False, default=UnmanagedOrderRequestStatus.PENDING.value)
+    purchase_order_id = Column(ForeignKey("purchase_orders.id"), nullable=True)  # 取り込み先発注
+    purchase_order_line_id = Column(ForeignKey("purchase_order_lines.id"), nullable=True)  # 取り込み先明細
+    staged_supplier_id = Column(ForeignKey("suppliers.id"), nullable=True)  # 発注候補に追加時に選択した仕入先
+    staged_at = Column(DateTime, nullable=True)  # 発注候補に追加した日時
+    acknowledged_at = Column(DateTime, nullable=True)  # 依頼者が入庫済を確認してリストから削除した日時
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(
+        DateTime,
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    item = relationship("Item", backref="unmanaged_order_requests")
+    order = relationship("PurchaseOrder", foreign_keys=[purchase_order_id])
+    line = relationship("PurchaseOrderLine", foreign_keys=[purchase_order_line_id])
+    staged_supplier = relationship("Supplier", foreign_keys=[staged_supplier_id])
+
+
 class PurchaseResult(Base):
-    """購入実績（入庫計上結果を総務・資産計上用に保存）。明細単位で1行。"""
+    """購入実績（入庫計上結果を総務・資産計上用に保存）。明細単位で1行。管理外は item_id null で item_name_free に品名。"""
     __tablename__ = "purchase_results"
 
     id = Column(Integer, primary_key=True, index=True)
     delivery_date = Column(Date, nullable=True)
     supplier_id = Column(ForeignKey("suppliers.id"), nullable=False)
     delivery_note_number = Column(String(64), nullable=True)
-    item_id = Column(ForeignKey("items.id"), nullable=False)
+    item_id = Column(ForeignKey("items.id"), nullable=True)  # 管理外の場合は null
+    item_name_free = Column(String(512), nullable=True)  # 管理外の品名（item_id が null のとき）
     quantity = Column(Integer, nullable=False)
     unit_price = Column(Integer, nullable=True)
     amount = Column(Integer, nullable=True)

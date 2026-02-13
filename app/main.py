@@ -18,11 +18,26 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response, JSONResp
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
-from sqlalchemy import func, nullsfirst, select, or_
+from sqlalchemy import and_, delete, func, nullsfirst, or_, select, update
 from sqlalchemy.orm import Session, selectinload
 
 from app.db.session import init_db, get_db, SessionLocal
-from app.models.tables import AppUser, InventoryItem, InventoryTransaction, Item, PurchaseOrder, PurchaseOrderLine, PurchaseOrderStatus, PurchaseResult, Supplier, TransactionType, UserRole
+from app.models.tables import (
+    AppUser,
+    InventoryItem,
+    InventoryTransaction,
+    Item,
+    PurchaseOrder,
+    PurchaseOrderLine,
+    PurchaseOrderStatus,
+    PurchaseResult,
+    Supplier,
+    TransactionType,
+    UnmanagedOrderRequest,
+    UnmanagedOrderRequestStatus,
+    UnitPriceHistory,
+    UserRole,
+)
 from app.services import PurchaseOrderError, PurchaseOrderService
 from pydantic import BaseModel
 from zoneinfo import ZoneInfo
@@ -386,6 +401,7 @@ class PurchaseOrderLinePayload(BaseModel):
     maker: Optional[str] = ""
     supplier_id: Optional[int] = None  # 品番×仕入先選択（Phase2）
     unit_price: Optional[int] = None   # 発注時単価（item_suppliers 自動登録用）
+    unmanaged_request_id: Optional[int] = None  # 管理外依頼（発注候補に追加済み）の ID
 
 
 class CreatePurchaseOrderPayload(BaseModel):
@@ -418,6 +434,34 @@ class ReplyDueDatePayload(BaseModel):
 class UpdatePurchaseOrderStatusPayload(BaseModel):
     status: str
     updated_by: Optional[str] = ""
+
+
+class UnmanagedOrderRequestCreatePayload(BaseModel):
+    """管理外発注依頼の登録用"""
+    requested_at: str  # YYYY-MM-DD
+    requested_department: Optional[str] = ""  # 依頼部署（email_settings の部署リストから選択）
+    requested_by: Optional[str] = ""  # 依頼者（担当者名）
+    item_id: Optional[int] = None  # マスタにある場合
+    item_code_free: Optional[str] = ""  # マスタにない場合の品番・品名
+    manufacturer: Optional[str] = ""
+    quantity: int = 1
+    usage_destination: Optional[str] = ""
+    note: Optional[str] = ""
+    vendor_reply_due_date: Optional[str] = ""  # YYYY-MM-DD
+
+
+class UnmanagedOrderRequestConvertPayload(BaseModel):
+    """管理外依頼を発注に取り込む用（廃止予定。stage を推奨）"""
+    request_ids: List[int]
+    supplier_id: int
+    department: Optional[str] = ""
+    ordered_by_user: Optional[str] = ""
+
+
+class UnmanagedOrderRequestStagePayload(BaseModel):
+    """管理外依頼を発注候補に追加する用"""
+    request_ids: List[int]
+    supplier_id: int
 
 
 class PurchaseResultUpdatePayload(BaseModel):
@@ -769,6 +813,7 @@ RECENT_TRANSACTIONS = [
 BASE_NAV_LINKS = [
     {'label': 'ダッシュボード', 'href': '/dashboard'},
     {'label': '在庫管理', 'href': '/inventory'},
+    {'label': '発注依頼', 'href': '/order-request'},
     {'label': '発注管理', 'href': '/orders'},
     {'label': '入出庫管理', 'href': '/logistics'},
     {'label': '購入品管理', 'href': '/purchase-results'},
@@ -1104,7 +1149,30 @@ def build_inventory_row(
         'order_due_display': order_due_display,
     }
 
-def build_sidebar_structure(snapshots: List[InventorySnapshot]) -> List[Dict[str, List[Dict[str, int]]]]:
+def _department_sort_key(dept_name: str) -> Tuple[int, str]:
+    """用途ツリー・発注サイドバーの部署並び順。usage_order の順を優先し、それ以外は名前順。"""
+    idx = DEPARTMENT_ORDER_INDEX.get(dept_name)
+    if idx is not None:
+        return (0, idx)
+    return (1, dept_name or "")
+
+
+def get_all_departments_for_sidebar(
+    snapshots: List[InventorySnapshot],
+    order_contacts_by_department: Optional[Dict[str, List[str]]] = None,
+) -> List[str]:
+    """用途ツリー・発注サイドバーに表示する「全部署」リスト。usage_order・email_settings・在庫の部署をマージする。"""
+    from_snapshots = {s.department for s in snapshots if s.department}
+    from_contacts = set((order_contacts_by_department or {}).keys())
+    all_set = set(DEPARTMENT_ORDER) | from_contacts | from_snapshots
+    return sorted(all_set, key=_department_sort_key)
+
+
+def build_sidebar_structure(
+    snapshots: List[InventorySnapshot],
+    all_departments: Optional[List[str]] = None,
+) -> List[Dict[str, List[Dict[str, int]]]]:
+    """部署別の用途・カテゴリ一覧を組み立てる。all_departments を渡すとその全部署を表示し、在庫のない部署は用途を usage_order から取得して件数 0 で表示する。"""
     structure: Dict[str, Dict[str, int]] = {}
     for snapshot in snapshots:
         department = snapshot.department
@@ -1112,27 +1180,42 @@ def build_sidebar_structure(snapshots: List[InventorySnapshot]) -> List[Dict[str
         if department not in structure:
             structure[department] = {}
         structure[department][usage] = structure[department].get(usage, 0) + 1
-    def department_key(dept_name: str) -> Tuple[int, str]:
-        idx = DEPARTMENT_ORDER_INDEX.get(dept_name)
-        if idx is not None:
-            return (0, idx)
-        return (1, dept_name)
+
     def usage_key(dept_name: str, usage_name: str) -> Tuple[int, str]:
         order_map = USAGE_ORDER.get(dept_name, {})
         idx = order_map.get(usage_name)
         if idx is not None:
             return (0, idx)
-        return (1, usage_name)
-    sorted_departments = sorted(structure.items(), key=lambda kv: department_key(kv[0]))
-    result: List[Dict[str, List[Dict[str, int]]]] = []
+        return (1, usage_name or "")
+
+    if all_departments is not None:
+        # 全部署を表示。在庫のない部署は USAGE_ORDER の用途を件数 0 で表示
+        result: List[Dict[str, List[Dict[str, int]]]] = []
+        for department in all_departments:
+            categories_from_snap = structure.get(department, {})
+            usage_order_for_dept = USAGE_ORDER.get(department, {})
+            all_usages = set(categories_from_snap.keys()) | set(usage_order_for_dept.keys())
+            ordered_categories = sorted(
+                [(u, categories_from_snap.get(u, 0)) for u in all_usages],
+                key=lambda kv: usage_key(department, kv[0]),
+            )
+            result.append(
+                {
+                    "name": department,
+                    "categories": [{"name": u, "count": c} for u, c in ordered_categories],
+                }
+            )
+        return result
+
+    # 従来どおり: 在庫に登場する部署のみ
+    sorted_departments = sorted(structure.items(), key=lambda kv: _department_sort_key(kv[0]))
+    result = []
     for department, categories in sorted_departments:
         ordered_categories = sorted(categories.items(), key=lambda kv: usage_key(department, kv[0]))
         result.append(
             {
-                'name': department,
-                'categories': [
-                    {'name': usage, 'count': count} for usage, count in ordered_categories
-                ],
+                "name": department,
+                "categories": [{"name": usage, "count": count} for usage, count in ordered_categories],
             }
         )
     return result
@@ -1659,6 +1742,8 @@ def inventory_index(
     snapshots = load_inventory_snapshots(db)
     if not snapshots:
         snapshots = SAMPLE_INVENTORY
+    _, _, order_contacts_by_department = load_order_contacts(EMAIL_SETTINGS_PATH)
+    all_departments = get_all_departments_for_sidebar(snapshots, order_contacts_by_department)
 
     filtered_snapshots = filter_inventory(
         snapshots,
@@ -1707,7 +1792,7 @@ def inventory_index(
     context = {
         'request': request,
         'nav_links': build_nav_links('/inventory', current_user),
-        'sidebar_structure': build_sidebar_structure(snapshots),
+        'sidebar_structure': build_sidebar_structure(snapshots, all_departments=all_departments),
         'category_options': build_category_options(snapshots),
         'selected_category': selected_category,
         'keyword': keyword,
@@ -1798,6 +1883,12 @@ def receive_purchase_order_to_inventory(
 ) -> Dict[str, object]:
     service = get_purchase_order_service(db)
     updated_by = str(current_user.get("display_name") or current_user.get("username") or "system")
+    # 納入日・伝票番号は必須
+    if not (payload.delivery_date and str(payload.delivery_date).strip()):
+        raise HTTPException(status_code=400, detail="納入日を入力してください。")
+    if not (payload.delivery_note_number and str(payload.delivery_note_number).strip()):
+        raise HTTPException(status_code=400, detail="伝票番号を入力してください。")
+
     line_receipts: Dict[int, int] = {}
     for row in payload.lines:
         line_receipts[int(row.line_id)] = int(row.quantity)
@@ -2179,6 +2270,16 @@ def manage_items(
     return templates.TemplateResponse('manage_items.html', context)
 
 
+def _purchaser_name_display(value: Optional[str]) -> str:
+    """購入実績一覧の購入者表示用。部署名なしのフルネームに統一する。
+    「部署名 姓 名」形式の場合は先頭の部署名を除き「姓 名」のみ返す。"""
+    raw = (value or "").strip()
+    parts = raw.split()
+    if len(parts) >= 3:
+        return " ".join(parts[1:])
+    return raw
+
+
 def _query_purchase_results_filtered(
     db: Session,
     delivery_date_from: Optional[str] = None,
@@ -2207,8 +2308,15 @@ def _query_purchase_results_filtered(
     if supplier_id is not None:
         stmt = stmt.where(PurchaseResult.supplier_id == supplier_id)
     if item_code and item_code.strip():
-        stmt = stmt.join(Item, PurchaseResult.item_id == Item.id).where(
-            or_(Item.item_code.ilike(f"%{item_code.strip()}%"), Item.name.ilike(f"%{item_code.strip()}%"))
+        pattern = f"%{item_code.strip()}%"
+        stmt = stmt.outerjoin(Item, PurchaseResult.item_id == Item.id).where(
+            or_(
+                and_(
+                    PurchaseResult.item_id.isnot(None),
+                    or_(Item.item_code.ilike(pattern), Item.name.ilike(pattern)),
+                ),
+                and_(PurchaseResult.item_id.is_(None), PurchaseResult.item_name_free.ilike(pattern)),
+            )
         )
     return db.scalars(stmt).unique().all()
 
@@ -2242,14 +2350,14 @@ def purchase_results_page(
             "supplier_name": r.supplier.name if r.supplier else "",
             "delivery_note_number": r.delivery_note_number or "",
             "item_code": r.item.item_code if r.item else "",
-            "item_name": r.item.name if r.item else "",
+            "item_name": (r.item.name if r.item else getattr(r, "item_name_free", None)) or "",
             "quantity": r.quantity,
             "unit_price": r.unit_price,
             "amount": r.amount,
             "purchase_month": r.purchase_month or "",
             "account_name": r.account_name or "",
             "expense_item_name": r.expense_item_name or "",
-            "purchaser_name": r.purchaser_name or "",
+            "purchaser_name": _purchaser_name_display(r.purchaser_name),
             "note": r.note or "",
         })
     context = {
@@ -2293,7 +2401,7 @@ def purchase_results_csv(
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow([
-        "納入日", "購入先", "納品書番号", "品番", "品名", "数量", "単価", "金額",
+        "納入日", "購入先", "伝票番号", "品番", "品名", "数量", "単価", "金額",
         "購入月", "科目名", "費目名", "購入者", "備考",
     ])
     for r in results:
@@ -2302,14 +2410,14 @@ def purchase_results_csv(
             r.supplier.name if r.supplier else "",
             r.delivery_note_number or "",
             r.item.item_code if r.item else "",
-            r.item.name if r.item else "",
+            (r.item.name if r.item else getattr(r, "item_name_free", None)) or "",
             r.quantity,
             r.unit_price if r.unit_price is not None else "",
             r.amount if r.amount is not None else "",
             r.purchase_month or "",
             r.account_name or "",
             r.expense_item_name or "",
-            r.purchaser_name or "",
+            _purchaser_name_display(r.purchaser_name),
             r.note or "",
         ])
     body = buf.getvalue()
@@ -2332,14 +2440,7 @@ def update_purchase_result(
     row = db.get(PurchaseResult, result_id)
     if not row:
         raise HTTPException(status_code=404, detail="購入実績が見つかりません。")
-    if payload.delivery_date is not None:
-        if payload.delivery_date.strip() == "":
-            row.delivery_date = None
-        else:
-            try:
-                row.delivery_date = date.fromisoformat(payload.delivery_date.strip())
-            except ValueError:
-                raise HTTPException(status_code=400, detail="納入日の形式が不正です。")
+    # 納入日・購入月は編集不可のため更新しない
     if payload.supplier_id is not None:
         sup = db.get(Supplier, payload.supplier_id)
         if not sup:
@@ -2355,8 +2456,7 @@ def update_purchase_result(
         row.unit_price = payload.unit_price if payload.unit_price >= 0 else None
     if payload.amount is not None:
         row.amount = payload.amount if payload.amount >= 0 else None
-    if payload.purchase_month is not None:
-        row.purchase_month = (payload.purchase_month.strip() or None)
+    # 購入月は編集不可のため更新しない
     if payload.account_name is not None:
         row.account_name = (payload.account_name.strip() or None)
     if payload.expense_item_name is not None:
@@ -2530,7 +2630,9 @@ def orders_page(
 ) -> HTMLResponse:
     selected_department = normalize_field(department)
     snapshots = load_inventory_snapshots(db)
-    sidebar_structure = build_sidebar_structure(snapshots)
+    order_contacts_all, order_contact_defaults, order_contacts_by_department = load_order_contacts(EMAIL_SETTINGS_PATH)
+    all_departments = get_all_departments_for_sidebar(snapshots, order_contacts_by_department)
+    sidebar_structure = build_sidebar_structure(snapshots, all_departments=all_departments)
     # 部署ごとの発注を前提とするため、未選択時は先頭の部署へリダイレクト
     if not selected_department and sidebar_structure:
         first_dept = (sidebar_structure[0].get('name') or '').strip()
@@ -2540,12 +2642,20 @@ def orders_page(
                 status_code=302,
             )
     service = get_purchase_order_service(db)
-    suggestions = service.build_low_stock_candidates(selected_department)
-    low_stock_count = len(suggestions)
+    order_candidates = service.build_order_candidates(selected_department)
+    low_stock_count = len([c for c in order_candidates if c.get("candidate_type") == "managed"])
     existing_orders = service.list_orders(selected_department)
     draft_count = sum(1 for order in existing_orders if order.get('status') == PurchaseOrderStatus.DRAFT.value)
     waiting_count = sum(1 for order in existing_orders if order.get('status') == PurchaseOrderStatus.WAITING.value)
-    order_contacts_all, order_contact_defaults, order_contacts_by_department = load_order_contacts(EMAIL_SETTINGS_PATH)
+    # ①の依頼リストには「まだ発注候補に追加していない」依頼のみ表示（追加済みは②に表示されるため）
+    unmanaged_requests_all = service.list_unmanaged_requests(exclude_staged=True)
+    # 部署を選択している場合は、管理外依頼もその部署に一致するものだけ表示
+    if selected_department:
+        unmanaged_requests = [r for r in unmanaged_requests_all if (r.get("requested_department") or "").strip() == selected_department]
+    else:
+        unmanaged_requests = unmanaged_requests_all
+    suppliers = db.scalars(select(Supplier).order_by(Supplier.name.asc())).all()
+    suppliers_for_convert = [{"id": s.id, "name": s.name or ""} for s in suppliers]
     order_contacts = (
         order_contacts_by_department.get(selected_department, [])
         if selected_department
@@ -2575,8 +2685,11 @@ def orders_page(
         'request': request,
         'nav_links': build_nav_links('/orders', current_user),
         'sidebar_structure': sidebar_structure,
-        'low_stock_suggestions': suggestions,
+        'order_candidates': order_candidates,
+        'low_stock_suggestions': order_candidates,  # テンプレート互換のため同じリストを渡す
         'existing_orders': existing_orders,
+        'unmanaged_requests': unmanaged_requests,
+        'suppliers_for_convert': suppliers_for_convert,
         'build_orders_url': build_orders_url,
         'selected_department': selected_department,
         'highlight_cards': highlight_cards,
@@ -2587,6 +2700,26 @@ def orders_page(
         'current_user': current_user,
     }
     return templates.TemplateResponse('orders.html', context)
+
+
+@app.get('/order-request', response_class=HTMLResponse)
+def order_request_page(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: Dict[str, Any] = Depends(require_viewer_user),
+) -> HTMLResponse:
+    """管理外発注依頼の入力ページ（一般ユーザー・管理者どちらも利用可）"""
+    _, _, order_contacts_by_department = load_order_contacts(EMAIL_SETTINGS_PATH)
+    # 依頼部署の選択肢は email_settings の accounts に記載のある部署（重複排除・ソート）
+    request_departments = sorted(order_contacts_by_department.keys()) if order_contacts_by_department else []
+    context = {
+        'request': request,
+        'nav_links': build_nav_links('/order-request', current_user),
+        'request_departments': request_departments,
+        'now': datetime.now(JST_ZONE),
+        'current_user': current_user,
+    }
+    return templates.TemplateResponse('order_request.html', context)
 
 
 @app.post('/purchase-orders')
@@ -2883,6 +3016,9 @@ def create_item(
     management_type = (payload.management_type or '').strip()
     if management_type not in ('管理', '管理外'):
         management_type = '管理'
+    # 管理外の場合は発注点・注文数量は使わないため 0 / 1 で登録
+    reorder_pt = 0 if management_type == '管理外' else max(0, payload.reorder_point)
+    default_qty = 1 if management_type == '管理外' else max(1, payload.default_order_quantity)
 
     item = Item(
         item_code=code,
@@ -2893,8 +3029,8 @@ def create_item(
         manufacturer=payload.manufacturer.strip() or None,
         shelf=payload.shelf.strip() or None,
         unit=payload.unit.strip() or None,
-        reorder_point=max(0, payload.reorder_point),
-        default_order_quantity=max(1, payload.default_order_quantity),
+        reorder_point=reorder_pt,
+        default_order_quantity=default_qty,
         unit_price=payload.unit_price if payload.unit_price is not None else None,
         account_name=(payload.account_name or "").strip() or None,
         expense_item_name=(payload.expense_item_name or "").strip() or None,
@@ -2941,37 +3077,95 @@ def update_item(
     item.manufacturer = payload.manufacturer.strip() or None
     item.shelf = payload.shelf.strip() or None
     item.unit = payload.unit.strip() or None
-    item.reorder_point = max(0, payload.reorder_point)
-    item.default_order_quantity = max(1, payload.default_order_quantity)
-    item.unit_price = payload.unit_price if payload.unit_price is not None else None
-    item.account_name = (payload.account_name or "").strip() or None
-    item.expense_item_name = (payload.expense_item_name or "").strip() or None
     management_type = (payload.management_type or '').strip()
     if management_type in ('管理', '管理外'):
         item.management_type = management_type
     elif not item.management_type:
         item.management_type = '管理'
+    # 管理外の場合は発注点・注文数量は使わないため 0 / 1 にそろえる
+    if item.management_type == '管理外':
+        item.reorder_point = 0
+        item.default_order_quantity = 1
+    else:
+        item.reorder_point = max(0, payload.reorder_point)
+        item.default_order_quantity = max(1, payload.default_order_quantity)
+    item.unit_price = payload.unit_price if payload.unit_price is not None else None
+    item.account_name = (payload.account_name or "").strip() or None
+    item.expense_item_name = (payload.expense_item_name or "").strip() or None
     item.supplier_id = supplier.id if supplier else None
     db.commit()
     return {'id': item.id, 'item_code': item.item_code}
 
 
-@app.delete('/api/items/{item_id}')
-def delete_item(
+@app.get('/api/items/{item_id}/can-delete')
+def can_delete_item(
     item_id: int,
     db: Session = Depends(get_db),
     current_user: Dict[str, Any] = Depends(require_manager_user),
 ) -> Dict[str, object]:
-    """仕入品を削除する。発注明細に紐づいている場合は削除不可。在庫・在庫履歴は連鎖削除される。"""
+    """削除可否を返す。発注明細に紐づいている場合は削除不可。"""
     _ = current_user
     item = db.scalar(select(Item).filter(Item.id == item_id))
     if not item:
         raise HTTPException(status_code=404, detail='仕入品が見つかりません。')
     lines_count = db.scalar(select(func.count(PurchaseOrderLine.id)).where(PurchaseOrderLine.item_id == item_id))
     if (lines_count or 0) > 0:
+        return {
+            'deletable': False,
+            'reason': 'この品目は発注明細に紐づいているため削除できません。発注の確定・入庫完了後に削除するか、該当発注明細を削除してから再度お試しください。',
+            'linked_order_lines_count': lines_count,
+        }
+    return {'deletable': True, 'reason': None}
+
+
+def _unlink_item_from_related_then_delete(db: Session, item: Item) -> None:
+    """発注明細・購入実績の紐づきを外し、単価履歴を削除してから品目を削除する（テストデータ用）。"""
+    label = (item.name or item.item_code or '（削除品）').strip() or '（削除品）'
+    label_short = label[:256] if len(label) > 256 else label
+    label_free = label[:512] if len(label) > 512 else label
+    db.execute(
+        update(PurchaseOrderLine)
+        .where(PurchaseOrderLine.item_id == item.id)
+        .values(item_id=None, item_name_free=label_short)
+    )
+    db.execute(
+        update(PurchaseResult)
+        .where(PurchaseResult.item_id == item.id)
+        .values(item_id=None, item_name_free=label_free)
+    )
+    db.execute(
+        update(UnmanagedOrderRequest)
+        .where(UnmanagedOrderRequest.item_id == item.id)
+        .values(item_id=None)
+    )
+    db.execute(delete(UnitPriceHistory).where(UnitPriceHistory.item_id == item.id))
+    db.delete(item)
+
+
+@app.delete('/api/items/{item_id}')
+def delete_item(
+    item_id: int,
+    unlink_order_lines: bool = Query(False, description='発注明細に紐づいている場合、紐づきを外してから削除する（テストデータ用）'),
+    db: Session = Depends(get_db),
+    current_user: Dict[str, Any] = Depends(require_manager_user),
+) -> Dict[str, object]:
+    """仕入品を削除する。発注明細に紐づいている場合は削除不可。unlink_order_lines=True のときは紐づきを外して削除する。"""
+    _ = current_user
+    item = db.scalar(select(Item).filter(Item.id == item_id))
+    if not item:
+        raise HTTPException(status_code=404, detail='仕入品が見つかりません。')
+    lines_count = db.scalar(select(func.count(PurchaseOrderLine.id)).where(PurchaseOrderLine.item_id == item_id))
+    if (lines_count or 0) > 0:
+        if unlink_order_lines:
+            _unlink_item_from_related_then_delete(db, item)
+            db.commit()
+            return {
+                'id': item_id,
+                'message': f'仕入品を削除しました（発注明細 {lines_count} 件の紐づきを外しました）。',
+            }
         raise HTTPException(
             status_code=400,
-            detail='この品目は発注明細に紐づいているため削除できません。',
+            detail='この品目は発注明細に紐づいているため削除できません。発注の確定・入庫完了後に削除するか、該当発注明細を削除してから再度お試しください。テストデータの場合は「紐づきを外して削除」を利用できます。',
         )
     db.delete(item)
     db.commit()
@@ -3016,3 +3210,183 @@ def search_items(
         for item in items
     ]
     return {'items': results}
+
+
+@app.get('/api/items/search')
+def search_items_for_request(
+    q: str = Query('', alias='q'),
+    limit: int = Query(20, ge=1, le=50),
+    db: Session = Depends(get_db),
+    current_user: Dict[str, Any] = Depends(require_viewer_user),
+) -> Dict[str, List[Dict[str, object]]]:
+    """品番・品名で検索（管理外依頼フォームのオートコンプリート用。viewer 以上で利用可）"""
+    _ = current_user
+    stmt = select(Item).options(selectinload(Item.supplier))
+    if q:
+        pattern = f"%{q}%"
+        stmt = stmt.filter(or_(Item.item_code.ilike(pattern), Item.name.ilike(pattern)))
+    stmt = stmt.order_by(Item.item_code.asc()).limit(limit)
+    items = db.scalars(stmt).all()
+    results = [
+        {
+            'id': item.id,
+            'item_code': item.item_code,
+            'name': item.name,
+            'manufacturer': item.manufacturer or '',
+        }
+        for item in items
+    ]
+    return {'items': results}
+
+
+@app.post('/api/unmanaged-order-requests')
+def create_unmanaged_order_request(
+    payload: UnmanagedOrderRequestCreatePayload,
+    db: Session = Depends(get_db),
+    current_user: Dict[str, Any] = Depends(require_viewer_user),
+) -> Dict[str, object]:
+    """管理外発注依頼を登録する（一般ユーザー・管理者どちらも可）"""
+    _ = current_user
+    requested_at: Optional[date] = None
+    if payload.requested_at and len(payload.requested_at) >= 10:
+        try:
+            requested_at = date.fromisoformat(payload.requested_at[:10])
+        except ValueError:
+            pass
+    if not requested_at:
+        requested_at = datetime.now(JST_ZONE).date()
+    if payload.quantity < 1:
+        raise HTTPException(status_code=400, detail="注文数量は1以上で指定してください。")
+    if not (payload.requested_department or "").strip():
+        raise HTTPException(status_code=400, detail="依頼部署を選択してください。")
+    if payload.item_id is None and not (payload.item_code_free or "").strip():
+        raise HTTPException(status_code=400, detail="品番・品名を入力するか、マスタから選択してください。")
+    item_id = payload.item_id
+    item_code_free = (payload.item_code_free or "").strip() or None
+    manufacturer = (payload.manufacturer or "").strip() or None
+    if payload.item_id is not None:
+        item = db.scalar(select(Item).filter(Item.id == payload.item_id))
+        if not item:
+            raise HTTPException(status_code=400, detail="指定した品目が存在しません。")
+        item_code_free = None
+        if not manufacturer:
+            manufacturer = item.manufacturer or None
+    vendor_due: Optional[date] = None
+    if payload.vendor_reply_due_date and len(payload.vendor_reply_due_date) >= 10:
+        try:
+            vendor_due = date.fromisoformat(payload.vendor_reply_due_date[:10])
+        except ValueError:
+            pass
+    req = UnmanagedOrderRequest(
+        requested_at=requested_at,
+        requested_department=(payload.requested_department or "").strip() or None,
+        requested_by=(payload.requested_by or "").strip() or None,
+        item_id=item_id,
+        item_code_free=item_code_free,
+        manufacturer=manufacturer,
+        quantity=payload.quantity,
+        usage_destination=(payload.usage_destination or "").strip() or None,
+        note=(payload.note or "").strip() or None,
+        vendor_reply_due_date=vendor_due,
+        status=UnmanagedOrderRequestStatus.PENDING.value,
+    )
+    db.add(req)
+    db.commit()
+    db.refresh(req)
+    return {
+        "id": req.id,
+        "requested_at": req.requested_at.isoformat(),
+        "message": "依頼を登録しました。",
+    }
+
+
+@app.get('/api/unmanaged-order-requests')
+def list_unmanaged_order_requests(
+    status: Optional[str] = Query(None),
+    all: bool = Query(False, alias="all"),
+    exclude_acknowledged: bool = Query(True),
+    db: Session = Depends(get_db),
+    current_user: Dict[str, Any] = Depends(require_viewer_user),
+) -> Dict[str, object]:
+    """管理外発注依頼一覧。viewer 以上で利用可。all=true で全ステータス。exclude_acknowledged=true で確認済みを除外。"""
+    _ = current_user
+    service = get_purchase_order_service(db)
+    requests = service.list_unmanaged_requests(
+        status_filter=status,
+        include_all=all,
+        exclude_acknowledged=exclude_acknowledged,
+    )
+    return {"requests": requests}
+
+
+@app.post('/api/unmanaged-order-requests/{request_id}/acknowledge')
+def acknowledge_unmanaged_order_request(
+    request_id: int,
+    db: Session = Depends(get_db),
+    current_user: Dict[str, Any] = Depends(require_viewer_user),
+) -> Dict[str, object]:
+    """依頼を「確認済み」にし、一覧から非表示にする。入庫済・発注取消・却下の依頼で実行可。"""
+    _ = current_user
+    req = db.scalar(
+        select(UnmanagedOrderRequest)
+        .options(
+            selectinload(UnmanagedOrderRequest.order),
+        )
+        .filter(UnmanagedOrderRequest.id == request_id)
+    )
+    if not req:
+        raise HTTPException(status_code=404, detail="依頼が見つかりません。")
+    # 入庫済・発注取消・却下のみ「リストから削除」可能
+    if req.status == UnmanagedOrderRequestStatus.REJECTED.value:
+        pass  # 却下は常に許可
+    elif req.status == UnmanagedOrderRequestStatus.CONVERTED.value and req.purchase_order_id:
+        if req.order is None or req.order.status == PurchaseOrderStatus.CANCELLED.value:
+            pass  # 発注取消（紐づく発注が削除済みまたは取消済み）
+        elif req.order.status == PurchaseOrderStatus.RECEIVED.value:
+            pass  # 入庫済
+        else:
+            raise HTTPException(status_code=400, detail="入庫済・発注取消・却下の依頼のみリストから削除できます。")
+    else:
+        raise HTTPException(status_code=400, detail="入庫済・発注取消・却下の依頼のみリストから削除できます。")
+    req.acknowledged_at = datetime.now(JST_ZONE)
+    db.commit()
+    return {"message": "リストから削除しました。"}
+
+
+@app.post('/api/unmanaged-order-requests/convert')
+def convert_unmanaged_requests_to_order(
+    payload: UnmanagedOrderRequestConvertPayload,
+    db: Session = Depends(get_db),
+    current_user: Dict[str, Any] = Depends(require_manager_user),
+) -> Dict[str, object]:
+    """管理外依頼を発注に取り込む（新規発注を作成）。廃止予定：発注候補に追加 → ②で発注作成を推奨。"""
+    _ = current_user
+    service = get_purchase_order_service(db)
+    try:
+        result = service.convert_requests_to_order(
+            request_ids=payload.request_ids,
+            supplier_id=payload.supplier_id,
+            department=(payload.department or "").strip(),
+            ordered_by_user=(payload.ordered_by_user or "").strip(),
+        )
+    except PurchaseOrderError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return result
+
+
+@app.post('/api/unmanaged-order-requests/stage')
+def stage_unmanaged_requests(
+    payload: UnmanagedOrderRequestStagePayload,
+    db: Session = Depends(get_db),
+    current_user: Dict[str, Any] = Depends(require_manager_user),
+) -> Dict[str, object]:
+    """管理外依頼を発注候補に追加する（ステージングのみ。発注は ② で作成）。"""
+    _ = current_user
+    service = get_purchase_order_service(db)
+    try:
+        return service.stage_unmanaged_requests(
+            request_ids=payload.request_ids,
+            supplier_id=payload.supplier_id,
+        )
+    except PurchaseOrderError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

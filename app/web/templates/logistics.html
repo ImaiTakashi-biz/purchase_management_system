@@ -61,7 +61,8 @@
       <div class="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h2 class="text-lg font-semibold">入庫待ち発注（発注メール送信済み）</h2>
-          <p class="text-xs text-slate-500">送信後の発注はここで入庫計上します。入庫計上すると在庫に反映されます。</p>
+          <p class="text-xs text-slate-600">・今回届いた分だけ入庫する場合：「今回入荷」に届いた数量を入力し、後日届く品目は 0 にしてください。後日届いたら再度「今回分を入庫計上」で登録します。</p>
+          <p class="text-xs text-slate-500">・全品目が揃って届いた場合はそのまま（残数が初期値）で計上できます。納入日と伝票番号は毎回必須です。</p>
         </div>
         <span class="text-xs text-slate-500">{{ pending_orders|length }} 件</span>
       </div>
@@ -105,12 +106,12 @@
               <td colspan="9" class="px-3 pb-3 pt-0">
                 <div class="mb-2 flex flex-wrap items-center gap-4 text-sm">
                   <label class="flex items-center gap-2">
-                    <span class="text-slate-500">納入日</span>
-                    <input type="date" class="delivery-date rounded border border-slate-300 px-2 py-1" data-order-id="{{ order.id }}" />
+                    <span class="text-slate-500">納入日 <span class="text-rose-500">*</span></span>
+                    <input type="date" class="delivery-date rounded border border-slate-300 px-2 py-1" data-order-id="{{ order.id }}" required />
                   </label>
                   <label class="flex items-center gap-2">
-                    <span class="text-slate-500">納品書番号</span>
-                    <input type="text" class="delivery-note-number w-40 rounded border border-slate-300 px-2 py-1" placeholder="任意" data-order-id="{{ order.id }}" />
+                    <span class="text-slate-500">伝票番号 <span class="text-rose-500">*</span></span>
+                    <input type="text" class="delivery-note-number w-40 rounded border border-slate-300 px-2 py-1" placeholder="必須" data-order-id="{{ order.id }}" required />
                   </label>
                 </div>
                 <div class="overflow-x-auto rounded-lg border border-slate-200 bg-white">
@@ -164,7 +165,6 @@
                     </tbody>
                   </table>
                 </div>
-                <p class="pt-2 text-[11px] text-slate-500">分納の場合は「今回入荷」を調整して計上してください。未調整なら残数全数を入庫します。</p>
               </td>
             </tr>
             {% endfor %}
@@ -489,6 +489,16 @@
           const deliveryNoteEl = document.querySelector(`.delivery-note-number[data-order-id="${orderId}"]`);
           const deliveryDate = deliveryDateEl?.value?.trim() || null;
           const deliveryNoteNumber = deliveryNoteEl?.value?.trim() || null;
+          if (!deliveryDate) {
+            showToast('納入日を入力してください。', 'error');
+            deliveryDateEl?.focus();
+            return;
+          }
+          if (!deliveryNoteNumber) {
+            showToast('伝票番号を入力してください。', 'error');
+            deliveryNoteEl?.focus();
+            return;
+          }
           const detailRow = button.closest('tr')?.nextElementSibling;
           const lineUnitPrices = {};
           detailRow?.querySelectorAll('.line-unit-price-input').forEach((input) => {
@@ -501,9 +511,7 @@
           if (!ok) return;
           try {
             setLoading(true, `PO #${orderId} を入庫計上しています...`);
-            const body = { lines };
-            if (deliveryDate) body.delivery_date = deliveryDate;
-            if (deliveryNoteNumber) body.delivery_note_number = deliveryNoteNumber;
+            const body = { lines, delivery_date: deliveryDate, delivery_note_number: deliveryNoteNumber };
             if (Object.keys(lineUnitPrices).length > 0) body.line_unit_prices = lineUnitPrices;
             const result = await jsonRequest(`/api/logistics/inbound/${orderId}/receive`, {
               method: 'POST',

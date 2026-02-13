@@ -103,6 +103,12 @@ def init_db() -> None:
         _ensure_column(conn, "suppliers", "fax_number", "VARCHAR(64)")
         _ensure_column(conn, "suppliers", "notes", "TEXT")
         _ensure_column(conn, "purchase_order_lines", "received_quantity", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "purchase_order_lines", "usage_destination", "VARCHAR(256)")
+        _ensure_column(conn, "unmanaged_order_requests", "requested_department", "VARCHAR(128)")
+        _ensure_column(conn, "unmanaged_order_requests", "acknowledged_at", "DATETIME")
+        _ensure_column(conn, "unmanaged_order_requests", "staged_supplier_id", "INTEGER REFERENCES suppliers(id)")
+        _ensure_column(conn, "unmanaged_order_requests", "staged_at", "DATETIME")
+        _ensure_column(conn, "purchase_results", "item_name_free", "VARCHAR(512)")
         # 既存の items.supplier_id + unit_price を item_suppliers に1件ずつ投入（重複は無視）
         if _table_exists(conn, "item_suppliers"):
             conn.execute(
@@ -124,6 +130,14 @@ def init_db() -> None:
                 "UPDATE purchase_order_lines "
                 "SET received_quantity = 0 "
                 "WHERE received_quantity IS NULL"
+            )
+        )
+        # 管理外の仕入品は発注点・注文数量を使わないため 0 / 1 にそろえる
+        conn.execute(
+            text(
+                "UPDATE items "
+                "SET reorder_point = 0, default_order_quantity = 1 "
+                "WHERE management_type = '管理外'"
             )
         )
         conn.commit()

@@ -18,6 +18,7 @@ from typing import Any, Optional
 
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.tables import (
@@ -33,6 +34,8 @@ from app.models.tables import (
     PurchaseOrderStatus,
     Supplier,
     TransactionType,
+    UnmanagedOrderRequest,
+    UnmanagedOrderRequestStatus,
     UnitPriceHistory,
 )
 
@@ -222,7 +225,6 @@ class PurchaseOrderService:
             .options(
                 selectinload(PurchaseOrder.supplier),
                 selectinload(PurchaseOrder.document),
-                selectinload(PurchaseOrder.lines).selectinload(PurchaseOrderLine.item).selectinload(Item.item_suppliers),
             )
             .order_by(PurchaseOrder.created_at.desc())
         )
@@ -237,6 +239,16 @@ class PurchaseOrderService:
                 continue
             if selected_department and (order.department or "") != selected_department:
                 continue
+            # 明細は発注ごとにID順で明示取得（管理外・品目紐づき混在時も全件確実に表示）
+            lines_stmt = (
+                select(PurchaseOrderLine)
+                .where(PurchaseOrderLine.purchase_order_id == order.id)
+                .options(
+                    selectinload(PurchaseOrderLine.item).selectinload(Item.item_suppliers),
+                )
+                .order_by(PurchaseOrderLine.id.asc())
+            )
+            order_lines = list(self.db.scalars(lines_stmt).all())
             payload.append(
                 {
                     "id": order.id,
@@ -249,14 +261,14 @@ class PurchaseOrderService:
                     "pdf_path": order.document.pdf_path if order.document else "",
                     "lines": [
                         self._line_with_unit_price(line, order.supplier_id)
-                        for line in order.lines
+                        for line in order_lines
                     ],
                 }
             )
         return payload
 
     def _line_with_unit_price(self, line: PurchaseOrderLine, supplier_id: Optional[int]) -> dict[str, Any]:
-        """発注明細の表示用辞書に単価を付与（item_suppliers 優先、なければ item.unit_price）。"""
+        """発注明細の表示用辞書に単価を付与（item_suppliers 優先、なければ item.unit_price）。管理外（item_id なし）も item_name_free で表示。"""
         unit_price: Optional[int] = None
         if line.item and supplier_id and line.item.item_suppliers:
             for is_row in line.item.item_suppliers:
@@ -275,6 +287,7 @@ class PurchaseOrderService:
             "received_quantity": max(0, int(line.received_quantity or 0)),
             "remaining_quantity": max(0, int(line.quantity or 0) - int(line.received_quantity or 0)),
             "vendor_reply_due_date": line.vendor_reply_due_date.isoformat() if line.vendor_reply_due_date else "",
+            "usage_destination": line.usage_destination or "",
             "note": line.note or "",
             "unit_price": unit_price,
         }
@@ -284,7 +297,9 @@ class PurchaseOrderService:
         lines: list[dict[str, Any]],
         ordered_by_user: str,
         department: str = "",
+        supplier_id_for_free_lines: Optional[int] = None,
     ) -> dict[str, Any]:
+        """発注を作成する。管理外のみの明細の場合は supplier_id_for_free_lines を指定する。"""
         if not lines:
             raise PurchaseOrderError("発注明細が空です。")
 
@@ -292,12 +307,78 @@ class PurchaseOrderService:
         normalized_lines: list[dict[str, Any]] = []
         resolved_department = (department or "").strip()
 
+        unmanaged_request_ids_in_order: list[int] = []  # 発注作成後に CONVERTED 更新するため
+
         for raw in lines:
+            unmanaged_request_id = raw.get("unmanaged_request_id")
+            if unmanaged_request_id is not None:
+                # 管理外依頼から明細を組み立て（発注候補に追加済みのもののみ）
+                req = self.db.scalar(
+                    select(UnmanagedOrderRequest)
+                    .where(UnmanagedOrderRequest.id == int(unmanaged_request_id))
+                    .where(UnmanagedOrderRequest.status == UnmanagedOrderRequestStatus.PENDING.value)
+                    .where(UnmanagedOrderRequest.staged_supplier_id.isnot(None))
+                    .options(selectinload(UnmanagedOrderRequest.item).selectinload(Item.item_suppliers))
+                )
+                if not req:
+                    raise PurchaseOrderError(f"依頼 ID {unmanaged_request_id} は発注候補に追加されていないか、存在しません。")
+                quantity = int(raw.get("quantity") or req.quantity or 0)
+                if quantity <= 0:
+                    raise PurchaseOrderError("発注数は1以上で指定してください。")
+                note = (raw.get("note") or "").strip() or (req.note or "")
+                usage_destination = (raw.get("usage_destination") or "").strip() or (req.usage_destination or "") or None
+                vendor_reply_due_date = raw.get("vendor_reply_due_date")
+                if vendor_reply_due_date is None and req.vendor_reply_due_date:
+                    vendor_reply_due_date = req.vendor_reply_due_date.isoformat()
+                # 画面で仕入先を変更した場合はそのIDを使用（管理外で品目マスタあり時）
+                line_supplier_raw = raw.get("supplier_id")
+                effective_supplier_id = int(line_supplier_raw) if line_supplier_raw is not None else req.staged_supplier_id
+                supplier_ids.add(effective_supplier_id)
+                if req.item:
+                    unit_price = None
+                    if req.item.item_suppliers:
+                        for is_row in req.item.item_suppliers:
+                            if is_row.supplier_id == effective_supplier_id:
+                                unit_price = getattr(is_row, "unit_price", None)
+                                break
+                    if unit_price is None:
+                        unit_price = getattr(req.item, "unit_price", None)
+                    normalized_lines.append({
+                        "item_id": req.item.id,
+                        "item_name_free": "",
+                        "maker": (req.manufacturer or req.item.manufacturer or "").strip(),
+                        "quantity": quantity,
+                        "note": note,
+                        "usage_destination": usage_destination,
+                        "vendor_reply_due_date": vendor_reply_due_date,
+                        "supplier_id": effective_supplier_id,
+                        "unit_price": unit_price,
+                        "unmanaged_request_id": req.id,
+                    })
+                else:
+                    normalized_lines.append({
+                        "item_id": None,
+                        "item_name_free": (req.item_code_free or "").strip(),
+                        "maker": (req.manufacturer or "").strip(),
+                        "quantity": quantity,
+                        "note": note,
+                        "usage_destination": usage_destination,
+                        "vendor_reply_due_date": vendor_reply_due_date,
+                        "supplier_id": effective_supplier_id,
+                        "unmanaged_request_id": req.id,
+                    })
+                unmanaged_request_ids_in_order.append(req.id)
+                continue
+
             item_id = raw.get("item_id")
+            if item_id is not None and int(item_id) == 0:
+                item_id = None
             quantity = int(raw.get("quantity") or 0)
             note = (raw.get("note") or "").strip()
             item_name_free = (raw.get("item_name_free") or "").strip()
             maker = (raw.get("maker") or "").strip()
+            usage_destination = (raw.get("usage_destination") or "").strip() or None
+            vendor_reply_due_date = raw.get("vendor_reply_due_date")  # YYYY-MM-DD or None
             line_supplier_id_raw = raw.get("supplier_id")
             line_supplier_id = int(line_supplier_id_raw) if line_supplier_id_raw is not None else None
             line_unit_price = raw.get("unit_price")
@@ -339,8 +420,11 @@ class PurchaseOrderService:
                         "maker": maker or (item.manufacturer or ""),
                         "quantity": quantity,
                         "note": note,
+                        "usage_destination": usage_destination,
+                        "vendor_reply_due_date": vendor_reply_due_date,
                         "supplier_id": effective_supplier_id,
                         "unit_price": unit_price,
+                        "unmanaged_request_id": None,
                     }
                 )
             else:
@@ -353,8 +437,15 @@ class PurchaseOrderService:
                         "maker": maker,
                         "quantity": quantity,
                         "note": note,
+                        "usage_destination": usage_destination,
+                        "vendor_reply_due_date": vendor_reply_due_date,
+                        "unmanaged_request_id": None,
                     }
                 )
+
+        # 管理外のみ（仕入先が明細から決まらない）場合は引数で渡された仕入先を使用
+        if not supplier_ids and supplier_id_for_free_lines is not None:
+            supplier_ids.add(supplier_id_for_free_lines)
 
         if not supplier_ids:
             raise PurchaseOrderError("仕入先が特定できないため発注を作成できません。")
@@ -393,18 +484,43 @@ class PurchaseOrderService:
         self.db.add(order)
         self.db.flush()
 
+        created_lines: list[PurchaseOrderLine] = []
         for line_data in normalized_lines:
-            self.db.add(
-                PurchaseOrderLine(
-                    purchase_order_id=order.id,
-                    item_id=line_data.get("item_id"),
-                    item_name_free=line_data["item_name_free"],
-                    maker=line_data["maker"],
-                    quantity=line_data["quantity"],
-                    received_quantity=0,
-                    note=line_data["note"],
-                )
+            due = line_data.get("vendor_reply_due_date")
+            due_date = None
+            # 管理外依頼由来の明細は「回答納期(転記)」に希望納期を出さない（仕入先回答後に転記する欄のため）
+            if line_data.get("unmanaged_request_id") is None and due and isinstance(due, str) and len(due) >= 10:
+                try:
+                    due_date = date.fromisoformat(due[:10])
+                except ValueError:
+                    pass
+            line = PurchaseOrderLine(
+                purchase_order_id=order.id,
+                item_id=line_data.get("item_id"),
+                item_name_free=line_data.get("item_name_free") or "",
+                maker=line_data.get("maker") or "",
+                quantity=line_data["quantity"],
+                received_quantity=0,
+                vendor_reply_due_date=due_date,
+                usage_destination=line_data.get("usage_destination"),
+                note=line_data.get("note") or "",
             )
+            self.db.add(line)
+            created_lines.append(line)
+
+        self.db.flush()
+
+        # 管理外依頼を CONVERTED に更新し、ステージングをクリア
+        for line_data, created_line in zip(normalized_lines, created_lines):
+            req_id = line_data.get("unmanaged_request_id")
+            if req_id is not None:
+                req = self.db.scalar(select(UnmanagedOrderRequest).where(UnmanagedOrderRequest.id == req_id))
+                if req:
+                    req.status = UnmanagedOrderRequestStatus.CONVERTED.value
+                    req.purchase_order_id = order.id
+                    req.purchase_order_line_id = created_line.id
+                    req.staged_supplier_id = None
+                    req.staged_at = None
 
         self.db.commit()
         return {
@@ -421,14 +537,18 @@ class PurchaseOrderService:
         department: str = "",
         candidate_overrides: dict[str, dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        candidates = self.build_low_stock_candidates(department)
+        # 在庫不足＋発注候補に追加済み管理外を同一リストで取得（選択品目で発注作成と同じ候補）
+        candidates = self.build_order_candidates(department)
         overrides = candidate_overrides or {}
-        # 行ごとに有効な仕入先を決定し、仕入先ごとにグループ化
+        # 行ごとに有効な仕入先を決定し、仕入先ごとにグループ化（オーバーライドキー: item_id または "unmanaged_{id}"）
         grouped: dict[int, list[dict[str, Any]]] = {}
         for row in candidates:
-            item_id = row["item_id"]
-            key = str(item_id)
-            o = overrides.get(key, {})
+            unmanaged_rid = row.get("unmanaged_request_id")
+            if unmanaged_rid is not None:
+                override_key = "unmanaged_" + str(unmanaged_rid)
+            else:
+                override_key = str(row.get("item_id") or "")
+            o = overrides.get(override_key, {})
             effective_supplier_id = o.get("supplier_id")
             if effective_supplier_id is not None:
                 effective_supplier_id = int(effective_supplier_id)
@@ -437,7 +557,7 @@ class PurchaseOrderService:
             if not effective_supplier_id:
                 continue
             effective_supplier_id = int(effective_supplier_id)
-            row_with_effective = {**row, "_effective_supplier_id": effective_supplier_id}
+            row_with_effective = {**row, "_effective_supplier_id": effective_supplier_id, "_override_key": override_key}
             grouped.setdefault(effective_supplier_id, []).append(row_with_effective)
 
         created_orders: list[int] = []
@@ -446,11 +566,10 @@ class PurchaseOrderService:
         for supplier_id, rows in grouped.items():
             if not rows:
                 continue
-            lines = []
+            lines: list[dict[str, Any]] = []
             for row in rows:
-                item_id = row["item_id"]
-                key = str(item_id)
                 sid = row["_effective_supplier_id"]
+                key = row["_override_key"]
                 if key in overrides:
                     o = overrides[key]
                     qty = int(o.get("quantity") or 0)
@@ -459,9 +578,9 @@ class PurchaseOrderService:
                     if unit_price is not None:
                         unit_price = int(unit_price)
                 else:
-                    qty = row["order_quantity"]
-                    note = row.get("note") or ""
-                    unit_price = None
+                    qty = int(row.get("order_quantity") or 1)
+                    note = str(row.get("note") or "").strip()
+                    unit_price = row.get("unit_price")
                 if unit_price is None and row.get("suppliers"):
                     for s in row["suppliers"]:
                         if s.get("supplier_id") == sid:
@@ -469,19 +588,33 @@ class PurchaseOrderService:
                             break
                 if unit_price is None:
                     unit_price = row.get("unit_price")
-                lines.append(
-                    {
+
+                unmanaged_rid = row.get("unmanaged_request_id")
+                if unmanaged_rid is not None:
+                    lines.append({
+                        "unmanaged_request_id": unmanaged_rid,
+                        "quantity": max(1, qty),
+                        "note": note,
+                        "supplier_id": sid,
+                        "unit_price": unit_price,
+                    })
+                else:
+                    item_id = row.get("item_id")
+                    if item_id is None:
+                        continue
+                    lines.append({
                         "item_id": item_id,
                         "quantity": max(1, qty),
                         "note": note,
                         "supplier_id": sid,
                         "unit_price": unit_price,
-                    }
-                )
+                    })
+            if not lines:
+                continue
             result = self.create_order(
                 lines=lines,
                 ordered_by_user=ordered_by_user,
-                department=rows[0].get("department") or "",
+                department=rows[0].get("department") or department,
             )
             created_orders.append(int(result["purchase_order_id"]))
             if bool(result.get("reused")):
@@ -494,6 +627,305 @@ class PurchaseOrderService:
             "reused_count": reused_count,
             "purchase_order_ids": created_orders,
         }
+
+    def list_unmanaged_requests(
+        self,
+        status_filter: Optional[str] = None,
+        include_all: bool = False,
+        exclude_acknowledged: bool = False,
+        exclude_staged: bool = False,
+    ) -> list[dict[str, Any]]:
+        """管理外発注依頼の一覧を返す。include_all が True の場合は全ステータス。exclude_acknowledged が True の場合は確認済みを除外。exclude_staged が True の場合は発注候補に追加済みを除外（①の依頼リスト用）。"""
+        stmt = (
+            select(UnmanagedOrderRequest)
+            .options(
+                selectinload(UnmanagedOrderRequest.item),
+                selectinload(UnmanagedOrderRequest.order),
+                selectinload(UnmanagedOrderRequest.line),
+            )
+            .order_by(UnmanagedOrderRequest.requested_at.desc(), UnmanagedOrderRequest.id.desc())
+        )
+        if exclude_acknowledged:
+            stmt = stmt.where(UnmanagedOrderRequest.acknowledged_at.is_(None))
+        if exclude_staged:
+            stmt = stmt.where(UnmanagedOrderRequest.staged_supplier_id.is_(None))
+        if include_all:
+            pass  # ステータスで絞らない
+        elif status_filter:
+            stmt = stmt.where(UnmanagedOrderRequest.status == status_filter)
+        else:
+            stmt = stmt.where(UnmanagedOrderRequest.status == UnmanagedOrderRequestStatus.PENDING.value)
+        requests = self.db.scalars(stmt).all()
+        result = []
+        for r in requests:
+            item_code = ""
+            item_name = ""
+            if r.item:
+                item_code = r.item.item_code or ""
+                item_name = r.item.name or ""
+            else:
+                item_name = r.item_code_free or ""
+                item_code = r.item_code_free or ""
+            # 発注・入庫状況をリアルタイム反映: 発注済み / 入庫済、回答納期
+            display_status = ""
+            line_reply_due_date = ""
+            is_received = False
+            if r.status == UnmanagedOrderRequestStatus.PENDING.value:
+                display_status = "未処理"
+            elif r.status == UnmanagedOrderRequestStatus.REJECTED.value:
+                display_status = "却下"
+            elif r.status == UnmanagedOrderRequestStatus.CONVERTED.value and r.order:
+                if r.order.status == PurchaseOrderStatus.RECEIVED.value:
+                    display_status = "入庫済"
+                    is_received = True
+                elif r.order.status == PurchaseOrderStatus.CANCELLED.value:
+                    display_status = "発注取消"
+                else:
+                    display_status = "発注済み"
+                if r.line and r.line.vendor_reply_due_date:
+                    line_reply_due_date = r.line.vendor_reply_due_date.isoformat()
+            elif r.status == UnmanagedOrderRequestStatus.CONVERTED.value and not r.order:
+                # 紐づいていた発注が削除済み（取消など）の場合は発注取消表示
+                display_status = "発注取消"
+            else:
+                display_status = "発注済み"
+                if r.line and r.line.vendor_reply_due_date:
+                    line_reply_due_date = r.line.vendor_reply_due_date.isoformat()
+            result.append({
+                "id": r.id,
+                "requested_at": r.requested_at.isoformat() if r.requested_at else "",
+                "requested_department": getattr(r, "requested_department", None) or "",
+                "requested_by": r.requested_by or "",
+                "item_id": r.item_id,
+                "item_code": item_code,
+                "item_name": item_name,
+                "item_code_free": r.item_code_free or "",
+                "manufacturer": r.manufacturer or "",
+                "quantity": r.quantity,
+                "usage_destination": r.usage_destination or "",
+                "note": r.note or "",
+                "vendor_reply_due_date": r.vendor_reply_due_date.isoformat() if r.vendor_reply_due_date else "",
+                "status": r.status,
+                "display_status": display_status,
+                "line_reply_due_date": line_reply_due_date,
+                "is_received": is_received,
+                "purchase_order_id": r.purchase_order_id,
+                "purchase_order_line_id": r.purchase_order_line_id,
+            })
+        return result
+
+    def stage_unmanaged_requests(self, request_ids: list[int], supplier_id: int) -> dict[str, Any]:
+        """管理外依頼を発注候補に追加する（ステージングのみ。発注は作成しない）。"""
+        if not request_ids:
+            raise PurchaseOrderError("追加する依頼を選択してください。")
+        supplier = self.db.scalar(select(Supplier).filter(Supplier.id == supplier_id))
+        if not supplier:
+            raise PurchaseOrderError("仕入先が見つかりません。")
+        stmt = (
+            select(UnmanagedOrderRequest)
+            .where(UnmanagedOrderRequest.id.in_(request_ids))
+            .where(UnmanagedOrderRequest.status == UnmanagedOrderRequestStatus.PENDING.value)
+        )
+        requests = list(self.db.scalars(stmt).all())
+        if len(requests) != len(request_ids):
+            raise PurchaseOrderError("指定した依頼の一部は未処理ではないか、存在しません。")
+        now = datetime.now(JST_ZONE)
+        for req in requests:
+            req.staged_supplier_id = supplier_id
+            req.staged_at = now
+        self.db.commit()
+        return {"staged_count": len(requests)}
+
+    def build_order_candidates(self, department: str = "") -> list[dict[str, Any]]:
+        """在庫不足候補と発注候補に追加済みの管理外依頼を統合したリストを返す。"""
+        managed = self.build_low_stock_candidates(department)
+        # 管理品には candidate_type を付与（テンプレートで識別用）
+        for row in managed:
+            row["candidate_type"] = "managed"
+            row["unmanaged_request_id"] = None
+
+        selected_department = (department or "").strip()
+        all_suppliers = self.db.scalars(select(Supplier).order_by(Supplier.name.asc())).all()
+        stmt = (
+            select(UnmanagedOrderRequest)
+            .where(UnmanagedOrderRequest.status == UnmanagedOrderRequestStatus.PENDING.value)
+            .where(UnmanagedOrderRequest.staged_supplier_id.isnot(None))
+            .options(
+                selectinload(UnmanagedOrderRequest.item).options(
+                    selectinload(Item.supplier),
+                    selectinload(Item.item_suppliers).selectinload(ItemSupplier.supplier),
+                ),
+                selectinload(UnmanagedOrderRequest.staged_supplier),
+            )
+            .order_by(UnmanagedOrderRequest.requested_at.asc(), UnmanagedOrderRequest.id.asc())
+        )
+        if selected_department:
+            stmt = stmt.where(UnmanagedOrderRequest.requested_department == selected_department)
+        staged_requests = self.db.scalars(stmt).all()
+
+        for r in staged_requests:
+            if r.item:
+                item_code = r.item.item_code or ""
+                item_name = r.item.name or ""
+                maker = r.manufacturer or (r.item.manufacturer or "")
+                # 仕入品マスタ（item_suppliers / items）から単価・仕入先一覧を構築（管理品と同様に変更・比較可能にする）
+                registered: list[dict[str, Any]] = []
+                for is_row in sorted(r.item.item_suppliers or [], key=lambda x: ((x.supplier.name or "") if x.supplier else "", x.supplier_id)):
+                    if is_row.supplier:
+                        registered.append({
+                            "supplier_id": is_row.supplier_id,
+                            "supplier_name": is_row.supplier.name or "未設定",
+                            "unit_price": getattr(is_row, "unit_price", None),
+                        })
+                # 品目の代表仕入先＋単価を必ず含める（item_suppliers に無くても items.unit_price を候補で表示するため）
+                if r.item.supplier and not any(s["supplier_id"] == r.item.supplier_id for s in registered):
+                    registered.append({
+                        "supplier_id": r.item.supplier_id,
+                        "supplier_name": r.item.supplier.name or "未設定",
+                        "unit_price": getattr(r.item, "unit_price", None),
+                    })
+                # 代表仕入先が registered にいるが単価が未設定の場合は items.unit_price をフォールバック
+                item_default_price = getattr(r.item, "unit_price", None)
+                if item_default_price is not None and r.item.supplier_id is not None:
+                    for s in registered:
+                        if s["supplier_id"] == r.item.supplier_id and s.get("unit_price") is None:
+                            s["unit_price"] = item_default_price
+                            break
+                registered_ids = {s["supplier_id"] for s in registered}
+                others = [
+                    {"supplier_id": s.id, "supplier_name": s.name or "未設定", "unit_price": None}
+                    for s in all_suppliers
+                    if s.id not in registered_ids
+                ]
+                suppliers = registered + others
+                _max_int = 999_999_999
+                suppliers = sorted(
+                    suppliers,
+                    key=lambda s: (s.get("unit_price") if s.get("unit_price") is not None else _max_int, s.get("supplier_name") or ""),
+                )
+                suppliers_with_price = [s for s in suppliers if s.get("unit_price") is not None]
+                # ステージング時の仕入先の単価をデフォルト表示に
+                unit_price = None
+                for s in suppliers:
+                    if s["supplier_id"] == r.staged_supplier_id:
+                        unit_price = s.get("unit_price")
+                        break
+                supplier_name = r.staged_supplier.name if r.staged_supplier else "未設定"
+                managed.append({
+                    "candidate_type": "unmanaged",
+                    "unmanaged_request_id": r.id,
+                    "item_id": None,
+                    "item_code": item_code,
+                    "name": item_name,
+                    "maker": maker,
+                    "supplier_id": r.staged_supplier_id,
+                    "supplier_name": supplier_name,
+                    "unit_price": unit_price,
+                    "suppliers": suppliers,
+                    "suppliers_with_price": suppliers_with_price,
+                    "on_hand": None,
+                    "reorder_point": None,
+                    "order_quantity": r.quantity,
+                    "note": r.note or "",
+                    "usage_destination": r.usage_destination or "",
+                    "vendor_reply_due_date": r.vendor_reply_due_date.isoformat() if r.vendor_reply_due_date else "",
+                })
+            else:
+                item_code = r.item_code_free or ""
+                item_name = r.item_code_free or ""
+                maker = r.manufacturer or ""
+                unit_price = None
+                supplier_name = r.staged_supplier.name if r.staged_supplier else "未設定"
+                managed.append({
+                    "candidate_type": "unmanaged",
+                    "unmanaged_request_id": r.id,
+                    "item_id": None,
+                    "item_code": item_code,
+                    "name": item_name,
+                    "maker": maker,
+                    "supplier_id": r.staged_supplier_id,
+                    "supplier_name": supplier_name,
+                    "unit_price": unit_price,
+                    "suppliers": [{"supplier_id": r.staged_supplier_id, "supplier_name": supplier_name, "unit_price": unit_price}],
+                    "suppliers_with_price": [],
+                    "on_hand": None,
+                    "reorder_point": None,
+                    "order_quantity": r.quantity,
+                    "note": r.note or "",
+                    "usage_destination": r.usage_destination or "",
+                    "vendor_reply_due_date": r.vendor_reply_due_date.isoformat() if r.vendor_reply_due_date else "",
+                })
+        return managed
+
+    def convert_requests_to_order(
+        self,
+        request_ids: list[int],
+        supplier_id: int,
+        department: str = "",
+        ordered_by_user: str = "",
+    ) -> dict[str, Any]:
+        """管理外依頼を発注に取り込む。新規発注を作成し、依頼を CONVERTED に更新する。"""
+        if not request_ids:
+            raise PurchaseOrderError("取り込む依頼を選択してください。")
+        stmt = (
+            select(UnmanagedOrderRequest)
+            .where(UnmanagedOrderRequest.id.in_(request_ids))
+            .where(UnmanagedOrderRequest.status == UnmanagedOrderRequestStatus.PENDING.value)
+            .order_by(UnmanagedOrderRequest.requested_at.asc(), UnmanagedOrderRequest.id.asc())
+        )
+        requests = list(self.db.scalars(stmt).all())
+        if len(requests) != len(request_ids):
+            raise PurchaseOrderError("指定した依頼の一部は未処理ではないか、存在しません。")
+        lines = []
+        for r in requests:
+            item_name_free = ""
+            item_id = r.item_id
+            if r.item:
+                item_name_free = ""  # 品番・品名は item から
+                maker = r.manufacturer or (r.item.manufacturer or "")
+            else:
+                item_name_free = r.item_code_free or ""
+                item_id = None
+                maker = r.manufacturer or ""
+            if item_id is not None:
+                lines.append({
+                    "item_id": item_id,
+                    "item_name_free": "",
+                    "maker": maker,
+                    "quantity": r.quantity,
+                    "note": r.note or "",
+                    "usage_destination": r.usage_destination or None,
+                    "vendor_reply_due_date": r.vendor_reply_due_date.isoformat() if r.vendor_reply_due_date else None,
+                })
+            else:
+                lines.append({
+                    "item_id": None,
+                    "item_name_free": item_name_free,
+                    "maker": maker,
+                    "quantity": r.quantity,
+                    "note": r.note or "",
+                    "usage_destination": r.usage_destination or None,
+                    "vendor_reply_due_date": r.vendor_reply_due_date.isoformat() if r.vendor_reply_due_date else None,
+                })
+        result = self.create_order(
+            lines=lines,
+            ordered_by_user=ordered_by_user,
+            department=department,
+            supplier_id_for_free_lines=supplier_id,
+        )
+        order_id = result["purchase_order_id"]
+        # 発注明細の ID を取得（追加順＝依頼順）
+        order_lines = self.db.scalars(
+            select(PurchaseOrderLine)
+            .where(PurchaseOrderLine.purchase_order_id == order_id)
+            .order_by(PurchaseOrderLine.id.asc())
+        ).all()
+        for req, line in zip(requests, order_lines):
+            req.status = UnmanagedOrderRequestStatus.CONVERTED.value
+            req.purchase_order_id = order_id
+            req.purchase_order_line_id = line.id
+        self.db.commit()
+        return result
 
     def generate_document(
         self,
@@ -829,6 +1261,13 @@ class PurchaseOrderService:
 
         if normalized == PurchaseOrderStatus.CANCELLED.value:
             cancelled_id = order.id
+            # 管理外発注依頼を未処理に戻す（取消後は再依頼として扱えるようにする）
+            for req in self.db.scalars(
+                select(UnmanagedOrderRequest).where(UnmanagedOrderRequest.purchase_order_id == order.id)
+            ):
+                req.status = UnmanagedOrderRequestStatus.PENDING.value
+                req.purchase_order_id = None
+                req.purchase_order_line_id = None
             self.db.delete(order)
             self.db.commit()
             return {"purchase_order_id": cancelled_id, "status": PurchaseOrderStatus.CANCELLED.value, "deleted": True}
@@ -859,13 +1298,16 @@ class PurchaseOrderService:
         if order.status not in {PurchaseOrderStatus.SENT.value, PurchaseOrderStatus.WAITING.value}:
             raise PurchaseOrderError("入庫計上は送信済み/入庫待ちの発注のみ実行できます。")
 
-        delivery_date_parsed: Optional[date] = None
-        if delivery_date and (delivery_date or "").strip():
-            try:
-                delivery_date_parsed = date.fromisoformat((delivery_date or "").strip())
-            except ValueError:
-                pass
+        if not delivery_date or not str(delivery_date).strip():
+            raise PurchaseOrderError("納入日を入力してください。")
+        try:
+            delivery_date_parsed: Optional[date] = date.fromisoformat(str(delivery_date).strip())
+        except ValueError:
+            raise PurchaseOrderError("納入日の形式が不正です（YYYY-MM-DD）。")
+
         note_trimmed = (delivery_note_number or "").strip() or None
+        if not note_trimmed:
+            raise PurchaseOrderError("伝票番号を入力してください。")
 
         normalized_map: dict[int, int] = {}
         if line_receipts:
@@ -906,7 +1348,7 @@ class PurchaseOrderService:
 
             line.received_quantity = received + incoming
             processed_count += 1
-            if line.item_id and incoming > 0:
+            if incoming > 0:
                 processed_lines.append((line, incoming))
 
             if line.item_id:
@@ -945,66 +1387,97 @@ class PurchaseOrderService:
 
         if order.supplier_id and processed_lines:
             purchase_month = delivery_date_parsed.strftime("%y%m") if delivery_date_parsed else None
+            # 購入実績の購入者はフルネーム（部署名 氏名）で記録
             purchaser_name = (order.ordered_by_user or "").strip() or None
             for line, incoming in processed_lines:
-                item = line.item
-                if not item:
-                    continue
-                is_row = self.db.scalar(
-                    select(ItemSupplier).filter(
-                        ItemSupplier.item_id == line.item_id,
-                        ItemSupplier.supplier_id == order.supplier_id,
-                    )
-                )
-                current_price: Optional[int] = None
-                if is_row:
-                    current_price = getattr(is_row, "unit_price", None)
-                if current_price is None:
-                    current_price = getattr(item, "unit_price", None)
-                override_price = line_unit_prices_norm.get(line.id)
-                if override_price is not None and override_price != current_price:
-                    self.db.add(
-                        UnitPriceHistory(
-                            item_id=line.item_id,
-                            supplier_id=order.supplier_id,
-                            old_unit_price=current_price,
-                            new_unit_price=override_price,
-                            changed_by=(updated_by or "").strip() or None,
-                            source="入庫計上",
-                            reference_id=line.id,
+                if line.item_id:
+                    # 管理品: 単価履歴・item_suppliers 更新・購入実績
+                    item = line.item
+                    if not item:
+                        continue
+                    is_row = self.db.scalar(
+                        select(ItemSupplier).filter(
+                            ItemSupplier.item_id == line.item_id,
+                            ItemSupplier.supplier_id == order.supplier_id,
                         )
                     )
+                    current_price: Optional[int] = None
                     if is_row:
-                        is_row.unit_price = override_price
-                    else:
+                        current_price = getattr(is_row, "unit_price", None)
+                    if current_price is None:
+                        current_price = getattr(item, "unit_price", None)
+                    override_price = line_unit_prices_norm.get(line.id)
+                    if override_price is not None and override_price != current_price:
                         self.db.add(
-                            ItemSupplier(
+                            UnitPriceHistory(
                                 item_id=line.item_id,
                                 supplier_id=order.supplier_id,
-                                unit_price=override_price,
+                                old_unit_price=current_price,
+                                new_unit_price=override_price,
+                                changed_by=(updated_by or "").strip() or None,
+                                source="入庫計上",
+                                reference_id=line.id,
                             )
                         )
-                    current_price = override_price
-                unit_price = current_price
-                amount = (unit_price or 0) * incoming
-                self.db.add(
-                    PurchaseResult(
-                        delivery_date=delivery_date_parsed,
-                        supplier_id=order.supplier_id,
-                        delivery_note_number=note_trimmed,
-                        item_id=line.item_id,
-                        quantity=incoming,
-                        unit_price=unit_price,
-                        amount=amount if unit_price is not None else None,
-                        purchase_month=purchase_month,
-                        account_name=getattr(item, "account_name", None) or None,
-                        expense_item_name=getattr(item, "expense_item_name", None) or None,
-                        purchaser_name=purchaser_name,
-                        note=line.note,
-                        source_order_id=order.id,
-                        source_line_id=line.id,
+                        if is_row:
+                            is_row.unit_price = override_price
+                        else:
+                            self.db.add(
+                                ItemSupplier(
+                                    item_id=line.item_id,
+                                    supplier_id=order.supplier_id,
+                                    unit_price=override_price,
+                                )
+                            )
+                        current_price = override_price
+                    unit_price = current_price
+                    amount = (unit_price or 0) * incoming
+                    self.db.add(
+                        PurchaseResult(
+                            delivery_date=delivery_date_parsed,
+                            supplier_id=order.supplier_id,
+                            delivery_note_number=note_trimmed,
+                            item_id=line.item_id,
+                            quantity=incoming,
+                            unit_price=unit_price,
+                            amount=amount if unit_price is not None else None,
+                            purchase_month=purchase_month,
+                            account_name=getattr(item, "account_name", None) or None,
+                            expense_item_name=getattr(item, "expense_item_name", None) or None,
+                            purchaser_name=purchaser_name,
+                            note=line.note,
+                            source_order_id=order.id,
+                            source_line_id=line.id,
+                        )
                     )
-                )
+                else:
+                    # 管理外: 購入実績に item_name_free で記録（item_id は null）
+                    unit_price = line_unit_prices_norm.get(line.id)
+                    amount = (unit_price or 0) * incoming if unit_price is not None else None
+                    try:
+                        self.db.add(
+                            PurchaseResult(
+                                delivery_date=delivery_date_parsed,
+                                supplier_id=order.supplier_id,
+                                delivery_note_number=note_trimmed,
+                                item_id=None,
+                                item_name_free=(line.item_name_free or "").strip() or None,
+                                quantity=incoming,
+                                unit_price=unit_price,
+                                amount=amount,
+                                purchase_month=purchase_month,
+                                account_name=None,
+                                expense_item_name=None,
+                                purchaser_name=purchaser_name,
+                                note=line.note,
+                                source_order_id=order.id,
+                                source_line_id=line.id,
+                            )
+                        )
+                        self.db.flush()
+                    except IntegrityError:
+                        # 既存DBで item_id が NOT NULL の場合はスキップ
+                        pass
 
         self.db.commit()
 
@@ -1124,8 +1597,8 @@ class PurchaseOrderService:
 
         rows: list[dict[str, Any]] = []
         for idx, line in enumerate(order.lines, start=1):
-            item_code = line.item.item_code if line.item else ""
-            item_name = line.item_name_free or ""
+            item_code = (line.item.item_code if line.item else "") or ""
+            item_name = (line.item.name if line.item else line.item_name_free) or ""
             maker = line.maker or (line.item.manufacturer if line.item else "") or ""
             rows.append(
                 {

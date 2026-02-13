@@ -128,7 +128,7 @@
               </select>
             </label>
           </div>
-          <div class="grid gap-2 md:grid-cols-2 items-end">
+          <div id="item-reorder-fields-wrap" class="grid gap-2 md:grid-cols-2 items-end">
             <label class="flex flex-col gap-1 text-sm">
               <span class="text-xs text-slate-500">発注点</span>
               <input id="item-reorder" type="number" min="0" value="0" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2" />
@@ -191,14 +191,14 @@
     </div>
   </div>
   <div id="toast-container" class="pointer-events-none fixed right-4 top-4 z-[80] flex w-[340px] max-w-[calc(100vw-2rem)] flex-col gap-2"></div>
-  <div id="confirm-modal" class="hidden fixed inset-0 z-[75] items-center justify-center px-4 py-6">
+  <div id="confirm-modal" class="fixed inset-0 z-[75] flex items-center justify-center p-4" style="display: none;">
     <button type="button" id="confirm-modal-backdrop" class="absolute inset-0 bg-slate-900/40" aria-label="閉じる"></button>
-    <div class="relative w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl">
+    <div class="relative w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl flex flex-col gap-4">
       <p class="text-sm font-semibold text-slate-900">確認</p>
-      <p id="confirm-modal-message" class="mt-2 text-sm text-slate-700">この操作を実行します。よろしいですか？</p>
-      <div class="mt-4 flex justify-end gap-2">
+      <p id="confirm-modal-message" class="text-sm text-slate-700">この操作を実行します。よろしいですか？</p>
+      <div class="flex flex-wrap justify-end gap-3 pt-2">
         <button type="button" id="confirm-modal-cancel" class="rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">キャンセル</button>
-        <button type="button" id="confirm-modal-ok" class="rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-dark">実行</button>
+        <button type="button" id="confirm-modal-ok" class="rounded-xl px-4 py-2 text-sm font-semibold min-w-[5rem]" style="background-color: #2563eb; color: #fff; border: 1px solid #2563eb;">実行</button>
       </div>
     </div>
   </div>
@@ -219,6 +219,17 @@
       const itemReorderInput = document.getElementById('item-reorder');
       const itemDefaultOrderQuantityInput = document.getElementById('item-default-order-quantity');
       const itemManagementTypeSelect = document.getElementById('item-management-type');
+      const itemReorderFieldsWrap = document.getElementById('item-reorder-fields-wrap');
+
+      /** 管理区分が「管理外」のときは発注点・注文数量を非表示にし、値は 0 / 1 にそろえる */
+      const toggleReorderFieldsVisibility = () => {
+        const isUnmanaged = itemManagementTypeSelect?.value === '管理外';
+        if (itemReorderFieldsWrap) itemReorderFieldsWrap.classList.toggle('hidden', !!isUnmanaged);
+        if (isUnmanaged) {
+          if (itemReorderInput) itemReorderInput.value = '0';
+          if (itemDefaultOrderQuantityInput) itemDefaultOrderQuantityInput.value = '1';
+        }
+      };
       const itemSupplierSelect = document.getElementById('item-supplier');
       const itemUnitPriceInput = document.getElementById('item-unit-price');
       const itemAccountNameInput = document.getElementById('item-account-name');
@@ -237,17 +248,23 @@
       const confirmModalCancel = document.getElementById('confirm-modal-cancel');
       const confirmModalBackdrop = document.getElementById('confirm-modal-backdrop');
       let confirmResolver = null;
-      const openConfirmModal = (message) => new Promise((resolve) => {
+      const openConfirmModal = (message, okButtonLabel = '実行') => new Promise((resolve) => {
         if (!confirmModal || !confirmModalMessage) { resolve(false); return; }
         confirmResolver = resolve;
         confirmModalMessage.textContent = message;
-        confirmModal.classList.remove('hidden');
-        confirmModal.classList.add('flex');
+        if (confirmModalOk) {
+          confirmModalOk.textContent = okButtonLabel;
+          const isDelete = okButtonLabel === '削除';
+          confirmModalOk.className = 'rounded-xl px-4 py-2 text-sm font-semibold min-w-[5rem]';
+          confirmModalOk.style.backgroundColor = isDelete ? '#dc2626' : '#2563eb';
+          confirmModalOk.style.color = '#fff';
+          confirmModalOk.style.border = '1px solid ' + (isDelete ? '#dc2626' : '#2563eb');
+        }
+        confirmModal.style.display = 'flex';
       });
       const closeConfirmModal = (accepted) => {
         if (!confirmModal) return;
-        confirmModal.classList.add('hidden');
-        confirmModal.classList.remove('flex');
+        confirmModal.style.display = 'none';
         if (confirmResolver) { const r = confirmResolver; confirmResolver = null; r(Boolean(accepted)); }
       };
       confirmModalOk?.addEventListener('click', () => closeConfirmModal(true));
@@ -336,6 +353,7 @@
         itemUnitPriceInput.value = '';
         if (itemAccountNameInput) itemAccountNameInput.value = '';
         if (itemExpenseItemNameInput) itemExpenseItemNameInput.value = '';
+        toggleReorderFieldsVisibility();
       };
 
       const createItemRow = (item) => {
@@ -380,6 +398,7 @@
           itemUnitPriceInput.value = row.dataset.unitPrice || '';
           if (itemAccountNameInput) itemAccountNameInput.value = row.dataset.accountName || '';
           if (itemExpenseItemNameInput) itemExpenseItemNameInput.value = row.dataset.expenseItemName || '';
+          toggleReorderFieldsVisibility();
           window.scrollTo({ top: 0, behavior: 'smooth' });
         });
         return row;
@@ -409,8 +428,12 @@
         }
       };
 
+      itemManagementTypeSelect?.addEventListener('change', toggleReorderFieldsVisibility);
+
       itemForm?.addEventListener('submit', async (event) => {
         event.preventDefault();
+        const managementType = itemManagementTypeSelect.value || '管理';
+        const isUnmanaged = managementType === '管理外';
         const payload = {
           item_code: itemCodeInput.value.trim(),
           name: itemCodeInput.value.trim() || itemTypeInput.value.trim() || '',
@@ -419,12 +442,12 @@
           department: itemDepartmentInput.value.trim(),
           manufacturer: itemManufacturerInput.value.trim(),
           shelf: itemShelfInput.value.trim(),
-          reorder_point: Number(itemReorderInput.value) || 0,
-          default_order_quantity: Math.max(1, Number(itemDefaultOrderQuantityInput.value) || 1),
+          reorder_point: isUnmanaged ? 0 : (Number(itemReorderInput.value) || 0),
+          default_order_quantity: isUnmanaged ? 1 : Math.max(1, Number(itemDefaultOrderQuantityInput.value) || 1),
           unit_price: itemUnitPriceInput.value !== '' ? Math.max(0, Number(itemUnitPriceInput.value) || 0) : null,
           account_name: itemAccountNameInput?.value?.trim() ?? '',
           expense_item_name: itemExpenseItemNameInput?.value?.trim() ?? '',
-          management_type: itemManagementTypeSelect.value || '管理',
+          management_type: managementType,
           supplier_id: itemSupplierSelect.value ? Number(itemSupplierSelect.value) : null,
         };
         if (!payload.item_code) {
@@ -466,12 +489,34 @@
           showToast('削除する仕入品を一覧から選択してください。', 'error');
           return;
         }
-        const label = `${itemCodeInput.value.trim() || ''} ${itemTypeInput.value.trim() || ''}`.trim() || '（品番・品名なし）';
-        const ok = await openConfirmModal(`「${label}」を削除しますか？発注明細に紐づいている場合は削除できません。在庫・在庫履歴は削除されます。`);
-        if (!ok) return;
+        let unlinkAndDelete = false;
         try {
-          setLoading(true, '仕入品を削除しています...');
-          const response = await fetch(`/api/items/${id}`, { method: 'DELETE' });
+          setLoading(true, '削除可否を確認しています...');
+          const canRes = await fetch(`/api/items/${id}/can-delete`);
+          const canData = await canRes.json().catch(() => ({}));
+          if (!canRes.ok) {
+            showToast(canData.detail || '削除可否の確認に失敗しました。', 'error');
+            return;
+          }
+          if (canData.deletable === false && canData.reason) {
+            const label = `${itemCodeInput.value.trim() || ''} ${itemTypeInput.value.trim() || ''}`.trim() || '（品番・品名なし）';
+            const msg = `「${label}」は発注明細に紐づいているため通常は削除できません。\nテストデータの場合は「紐づきを外して削除」で発注明細の参照を外してから削除できます。実行しますか？`;
+            const ok = await openConfirmModal(msg, '紐づきを外して削除');
+            if (!ok) return;
+            unlinkAndDelete = true;
+          }
+        } finally {
+          setLoading(false);
+        }
+        const label = `${itemCodeInput.value.trim() || ''} ${itemTypeInput.value.trim() || ''}`.trim() || '（品番・品名なし）';
+        if (!unlinkAndDelete) {
+          const ok = await openConfirmModal(`「${label}」を削除しますか？在庫・在庫履歴は削除されます。`, '削除');
+          if (!ok) return;
+        }
+        try {
+          setLoading(true, unlinkAndDelete ? '紐づきを外して削除しています...' : '仕入品を削除しています...');
+          const url = unlinkAndDelete ? `/api/items/${id}?unlink_order_lines=true` : `/api/items/${id}`;
+          const response = await fetch(url, { method: 'DELETE' });
           const result = await response.json().catch(() => ({}));
           if (!response.ok) {
             throw new Error(result.detail || '削除に失敗しました。');
@@ -485,6 +530,7 @@
         }
       });
 
+      toggleReorderFieldsVisibility();
       renderItemList(initialItems);
     });
   </script>

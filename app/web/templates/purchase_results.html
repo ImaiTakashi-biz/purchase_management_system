@@ -76,7 +76,7 @@
           </select>
         </label>
         <label class="flex flex-col gap-1 text-sm">
-          <span class="text-xs text-slate-500">品番・品名</span>
+          <span class="text-xs text-slate-500">品番</span>
           <input type="text" name="item_code" value="{{ filters.item_code }}" placeholder="部分一致" class="rounded-xl border border-slate-200 px-3 py-2 w-40" />
         </label>
         <button type="submit" class="rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-dark">絞り込み</button>
@@ -92,9 +92,8 @@
             <tr>
               <th class="px-2 py-2 text-left w-[7%]">納入日</th>
               <th class="px-2 py-2 text-left w-[11%]">購入先</th>
-              <th class="px-2 py-2 text-left w-[7%]">納品書番号</th>
+              <th class="px-2 py-2 text-left w-[7%]">伝票番号</th>
               <th class="px-2 py-2 text-left w-[5%]">品番</th>
-              <th class="px-2 py-2 text-left w-[9%]">品名</th>
               <th class="px-2 py-2 text-right w-[4%]">数量</th>
               <th class="px-2 py-2 text-right w-[5%]">単価</th>
               <th class="px-2 py-2 text-right w-[6%]">金額</th>
@@ -109,7 +108,7 @@
           <tbody class="divide-y divide-slate-100">
             {% for r in results %}
             <tr class="hover:bg-slate-50 purchase-result-row" data-id="{{ r.id }}">
-              <td class="px-2 py-1"><input type="date" name="delivery_date" value="{{ r.delivery_date }}" class="delivery-date-input w-full max-w-full rounded border border-slate-200 px-2 py-1.5 text-sm" /></td>
+              <td class="px-2 py-1.5 text-slate-700">{{ r.delivery_date }}</td>
               <td class="px-2 py-1">
                 <select name="supplier_id" class="w-full max-w-full rounded border border-slate-200 px-2 py-1.5 text-sm">
                   {% for s in suppliers %}
@@ -119,11 +118,10 @@
               </td>
               <td class="px-2 py-1"><input type="text" name="delivery_note_number" value="{{ r.delivery_note_number }}" class="w-full max-w-full rounded border border-slate-200 px-2 py-1.5 text-sm" /></td>
               <td class="px-2 py-2 font-medium text-slate-700">{{ r.item_code }}</td>
-              <td class="px-2 py-2 text-slate-700">{{ r.item_name }}</td>
               <td class="px-2 py-1 text-right"><input type="number" name="quantity" value="{{ r.quantity }}" min="0" class="w-full max-w-[4rem] rounded border border-slate-200 px-2 py-1.5 text-sm text-right" /></td>
               <td class="px-2 py-1 text-right"><input type="number" name="unit_price" value="{{ r.unit_price if r.unit_price is not none else '' }}" min="0" placeholder="—" class="w-full max-w-[4.5rem] rounded border border-slate-200 px-2 py-1.5 text-sm text-right" /></td>
               <td class="px-2 py-1 text-right"><input type="number" name="amount" value="{{ r.amount if r.amount is not none else '' }}" min="0" placeholder="—" class="w-full max-w-[5rem] rounded border border-slate-200 px-2 py-1.5 text-sm text-right" /></td>
-              <td class="px-2 py-1"><input type="text" name="purchase_month" value="{{ r.purchase_month }}" maxlength="4" placeholder="例: 2602" class="purchase-month-input w-full max-w-[3.5rem] rounded border border-slate-200 px-2 py-1.5 text-sm" /></td>
+              <td class="px-2 py-1.5 text-slate-700">{{ r.purchase_month }}</td>
               <td class="px-2 py-1"><input type="text" name="account_name" value="{{ r.account_name }}" class="w-full max-w-full rounded border border-slate-200 px-2 py-1.5 text-sm" /></td>
               <td class="px-2 py-1"><input type="text" name="expense_item_name" value="{{ r.expense_item_name }}" class="w-full max-w-full rounded border border-slate-200 px-2 py-1.5 text-sm" /></td>
               <td class="px-2 py-1"><input type="text" name="purchaser_name" value="{{ r.purchaser_name }}" class="w-full max-w-full rounded border border-slate-200 px-2 py-1.5 text-sm" /></td>
@@ -135,7 +133,7 @@
             {% endfor %}
             {% if not results %}
             <tr>
-              <td class="px-3 py-4 text-center text-slate-500" colspan="14">該当する購入実績はありません。</td>
+              <td class="px-3 py-4 text-center text-slate-500" colspan="13">該当する購入実績はありません。</td>
             </tr>
             {% endif %}
           </tbody>
@@ -185,14 +183,13 @@
             const n = parseInt(v, 10);
             return isNaN(n) ? null : n;
           };
+          // 納入日・購入月は編集不可のため送信しない
           const payload = {
-            delivery_date: get('delivery_date').trim() || null,
             supplier_id: getNum('supplier_id'),
             delivery_note_number: get('delivery_note_number').trim() || null,
             quantity: getNum('quantity'),
             unit_price: getNum('unit_price'),
             amount: getNum('amount'),
-            purchase_month: get('purchase_month').trim() || null,
             account_name: get('account_name').trim() || null,
             expense_item_name: get('expense_item_name').trim() || null,
             purchaser_name: get('purchaser_name').trim() || null,

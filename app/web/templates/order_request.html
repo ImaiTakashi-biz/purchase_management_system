@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>発注依頼</title>
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet" />
+  <script src="https://cdn.tailwindcss.com?plugins=forms"></script>
+  <script id="tailwind-config">
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            primary: "#1152d4",
+            "primary-dark": "#0e3c9a",
+          },
+        },
+      },
+    };
+  </script>
+  <style>
+    body { font-family: "Noto Sans JP", "Yu Gothic", sans-serif; }
+    .material-symbols-outlined { font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
+    .autocomplete-list { max-height: 200px; overflow-y: auto; }
+  </style>
+</head>
+<body class="bg-slate-100 text-slate-900">
+  <header class="sticky top-0 z-30 bg-white border-b border-slate-200">
+    <div class="max-w-screen-2xl mx-auto flex flex-col gap-3 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
+      <div>
+        <p class="text-xs text-slate-500 uppercase tracking-[0.3em]">購入品一元管理</p>
+        <p class="text-2xl font-bold">発注依頼</p>
+      </div>
+      <div class="flex items-center gap-3">
+        <span class="text-xs text-slate-500" id="list-updated-at">更新: {{ now.strftime('%Y/%m/%d %H:%M') }}</span>
+        <button type="button" id="btn-open-request-dialog" class="rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-white hover:bg-primary-dark inline-flex items-center gap-2">
+          <span class="material-symbols-outlined text-lg">add_circle</span>
+          発注依頼
+        </button>
+      </div>
+    </div>
+    <div class="border-t border-slate-100">
+      <div class="max-w-screen-2xl mx-auto flex flex-wrap items-center gap-4 px-4 py-2 text-xs uppercase tracking-[0.3em]">
+        {% for link in nav_links %}
+        <a href="{{ link.href }}" class="py-2 {% if link.right %}ml-auto {% endif %}{% if link.active %}text-primary border-b-2 border-primary{% else %}text-slate-500 hover:text-slate-900{% endif %}">{{ link.label }}</a>
+        {% endfor %}
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-screen-2xl mx-auto w-full px-4 py-6">
+    <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm space-y-4">
+      <div>
+        <h2 class="text-lg font-semibold">依頼一覧</h2>
+        <p class="text-xs text-slate-500">依頼したアイテムと状況を確認できます。新規依頼は「発注依頼」ボタンから登録してください。</p>
+      </div>
+      <div id="request-list-loading" class="text-sm text-slate-500 py-4">読み込み中...</div>
+      <div id="request-list-container" class="hidden overflow-x-auto border border-slate-200 rounded-xl">
+        <table class="min-w-full text-sm">
+          <thead class="bg-slate-50 text-xs text-slate-500 uppercase">
+            <tr>
+              <th class="px-3 py-2 text-left">依頼日</th>
+              <th class="px-3 py-2 text-left">依頼部署</th>
+              <th class="px-3 py-2 text-left">依頼者</th>
+              <th class="px-3 py-2 text-left">品番</th>
+              <th class="px-3 py-2 text-left">メーカー</th>
+              <th class="px-3 py-2 text-right">数量</th>
+              <th class="px-3 py-2 text-left">使用先</th>
+              <th class="px-3 py-2 text-left">希望納期</th>
+              <th class="px-3 py-2 text-left">回答納期</th>
+              <th class="px-3 py-2 text-left">備考</th>
+              <th class="px-3 py-2 text-left">ステータス</th>
+            </tr>
+          </thead>
+          <tbody id="request-list-body" class="divide-y divide-slate-100"></tbody>
+        </table>
+      </div>
+      <div id="request-list-empty" class="hidden text-sm text-slate-500 py-4">依頼はまだありません。「発注依頼」ボタンから登録してください。</div>
+    </section>
+  </main>
+
+  <!-- 発注依頼入力モーダル -->
+  <div id="request-dialog" class="hidden fixed inset-0 z-50 items-center justify-center p-4 bg-slate-900/50">
+    <div class="relative w-full max-w-3xl max-h-[90vh] overflow-y-auto rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl">
+      <div class="flex items-center justify-between mb-4">
+        <h3 class="text-lg font-semibold">依頼内容を入力</h3>
+        <button type="button" id="btn-close-request-dialog" class="text-slate-400 hover:text-slate-700 p-1" aria-label="閉じる">&times;</button>
+      </div>
+      <p class="text-xs text-slate-500 mb-4">管理外品目について、注文数量を指定して管理者へ発注を依頼します。マスタに品番があれば検索で選択するとメーカー名が自動反映されます。</p>
+      <form id="order-request-form" class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <label class="flex flex-col gap-1 text-sm sm:col-span-2 lg:col-span-1">
+          <span class="text-xs text-slate-500">依頼日</span>
+          <input type="date" id="requested-at" name="requested_at" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2" required />
+        </label>
+        <label class="flex flex-col gap-1 text-sm sm:col-span-2 lg:col-span-1">
+          <span class="text-xs text-slate-500">依頼部署 <span class="text-rose-500">*</span></span>
+          <select id="requested-department" name="requested_department" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2" required>
+            <option value="">選択してください</option>
+            {% for dept in request_departments %}
+            <option value="{{ dept }}">{{ dept }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label class="flex flex-col gap-1 text-sm sm:col-span-2 lg:col-span-1">
+          <span class="text-xs text-slate-500">依頼者</span>
+          <input type="text" id="requested-by" name="requested_by" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2" placeholder="担当者名" />
+        </label>
+        <label class="flex flex-col gap-1 text-sm sm:col-span-2">
+          <span class="text-xs text-slate-500">品番（検索または直接入力）</span>
+          <div class="relative">
+            <input type="text" id="item-search" name="item_search" class="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2" placeholder="品番で検索・入力" autocomplete="off" />
+            <input type="hidden" id="item-id" name="item_id" value="" />
+            <div id="item-autocomplete" class="hidden absolute left-0 right-0 top-full z-20 mt-1 rounded-xl border border-slate-200 bg-white shadow-lg autocomplete-list"></div>
+          </div>
+          <p class="text-xs text-slate-400 mt-1">マスタにない品目はそのまま入力してください。選択するとメーカー名が自動入力されます。</p>
+        </label>
+        <label class="flex flex-col gap-1 text-sm sm:col-span-2 lg:col-span-1">
+          <span class="text-xs text-slate-500">メーカー名</span>
+          <input type="text" id="manufacturer" name="manufacturer" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2" placeholder="自動反映または手入力" />
+        </label>
+        <label class="flex flex-col gap-1 text-sm">
+          <span class="text-xs text-slate-500">注文数量</span>
+          <input type="number" id="quantity" name="quantity" min="1" value="1" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 w-24" required />
+        </label>
+        <label class="flex flex-col gap-1 text-sm sm:col-span-2">
+          <span class="text-xs text-slate-500">使用先</span>
+          <input type="text" id="usage-destination" name="usage_destination" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2" placeholder="例: 中圧フィルター予備在庫" />
+        </label>
+        <label class="flex flex-col gap-1 text-sm sm:col-span-2">
+          <span class="text-xs text-slate-500">希望納期</span>
+          <input type="date" id="vendor-reply-due-date" name="vendor_reply_due_date" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 w-40" />
+        </label>
+        <label class="flex flex-col gap-1 text-sm sm:col-span-2">
+          <span class="text-xs text-slate-500">備考</span>
+          <textarea id="note" name="note" rows="2" class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2" placeholder="特記事項があれば入力"></textarea>
+        </label>
+        <div class="sm:col-span-2 lg:col-span-3 flex flex-wrap gap-3 items-end pt-2">
+          <button type="submit" class="rounded-xl bg-primary px-6 py-2 text-sm font-semibold text-white hover:bg-primary-dark">依頼を登録</button>
+          <button type="button" id="btn-dialog-clear" class="rounded-xl border border-slate-300 px-6 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">クリア</button>
+          <button type="button" id="btn-dialog-cancel" class="rounded-xl border border-slate-300 px-6 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">キャンセル</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="toast-container" class="pointer-events-none fixed right-4 top-4 z-[80] flex w-[340px] max-w-[calc(100vw-2rem)] flex-col gap-2"></div>
+
+  <script>
+    (function () {
+      const today = new Date().toISOString().slice(0, 10);
+      const STATUS_JA = { 'PENDING': '未処理', 'CONVERTED': '発注済み', 'REJECTED': '却下' };
+      const DISPLAY_STATUS_CLASS = {
+        '未処理': 'bg-amber-50 text-amber-700 border-amber-200',
+        '却下': 'bg-rose-50 text-rose-700 border-rose-200',
+        '発注済み': 'bg-blue-50 text-blue-700 border-blue-200',
+        '入庫済': 'bg-emerald-50 text-emerald-700 border-emerald-200',
+      };
+
+      const requestListLoading = document.getElementById('request-list-loading');
+      const requestListContainer = document.getElementById('request-list-container');
+      const requestListBody = document.getElementById('request-list-body');
+      const requestListEmpty = document.getElementById('request-list-empty');
+      const listUpdatedAt = document.getElementById('list-updated-at');
+      const requestDialog = document.getElementById('request-dialog');
+      const btnOpenDialog = document.getElementById('btn-open-request-dialog');
+      const btnCloseDialog = document.getElementById('btn-close-request-dialog');
+      const btnDialogCancel = document.getElementById('btn-dialog-cancel');
+      const btnDialogClear = document.getElementById('btn-dialog-clear');
+      const itemSearchEl = document.getElementById('item-search');
+      const itemIdEl = document.getElementById('item-id');
+      const manufacturerEl = document.getElementById('manufacturer');
+      const usageDestEl = document.getElementById('usage-destination');
+      const autocompleteDiv = document.getElementById('item-autocomplete');
+      let searchTimeout = null;
+
+      function showToast(message, type) {
+        const container = document.getElementById('toast-container');
+        if (!container) return;
+        const div = document.createElement('div');
+        div.className = 'rounded-xl border px-4 py-3 text-sm shadow-lg ' + (type === 'error' ? 'bg-rose-50 border-rose-200 text-rose-800' : type === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-slate-50 border-slate-200 text-slate-800');
+        div.textContent = message;
+        container.appendChild(div);
+        setTimeout(() => div.remove(), 4000);
+      }
+
+      function setListUpdatedAt() {
+        const now = new Date();
+        const s = now.getFullYear() + '/' + String(now.getMonth() + 1).padStart(2, '0') + '/' + String(now.getDate()).padStart(2, '0') + ' ' + String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
+        if (listUpdatedAt) listUpdatedAt.textContent = '更新: ' + s;
+      }
+
+      async function loadRequestList() {
+        requestListLoading.classList.remove('hidden');
+        requestListContainer.classList.add('hidden');
+        requestListEmpty.classList.add('hidden');
+        try {
+          const res = await fetch('/api/unmanaged-order-requests?all=true&exclude_acknowledged=true');
+          const data = await res.json();
+          const requests = data.requests || [];
+          requestListLoading.classList.add('hidden');
+          if (requests.length === 0) {
+            requestListEmpty.classList.remove('hidden');
+            return;
+          }
+          requestListBody.innerHTML = '';
+          requests.forEach(function (r) {
+            const tr = document.createElement('tr');
+            tr.className = 'hover:bg-slate-50';
+            tr.dataset.requestId = r.id;
+            const itemDisplay = r.item_code || r.item_code_free || '-';
+            const displayStatus = r.display_status || STATUS_JA[r.status] || r.status;
+            const statusClass = DISPLAY_STATUS_CLASS[displayStatus] || 'bg-slate-50 text-slate-700 border-slate-200';
+            const lineReply = r.line_reply_due_date || '-';
+            let statusCell = '<span class="rounded-full border px-2 py-0.5 text-xs font-medium ' + statusClass + '">' + displayStatus + '</span>';
+            var canAcknowledge = r.is_received || displayStatus === '発注取消' || displayStatus === '却下';
+            if (canAcknowledge) {
+              statusCell += ' <button type="button" class="btn-acknowledge ml-2 rounded border border-slate-300 px-2 py-0.5 text-xs text-slate-600 hover:bg-slate-100" data-request-id="' + r.id + '">リストから削除</button>';
+            }
+            tr.innerHTML = '<td class="px-3 py-2">' + (r.requested_at || '-') + '</td><td class="px-3 py-2">' + (r.requested_department || '-') + '</td><td class="px-3 py-2">' + (r.requested_by || '-') + '</td><td class="px-3 py-2">' + itemDisplay + '</td><td class="px-3 py-2">' + (r.manufacturer || '-') + '</td><td class="px-3 py-2 text-right">' + (r.quantity ?? '-') + '</td><td class="px-3 py-2">' + (r.usage_destination || '-') + '</td><td class="px-3 py-2">' + (r.vendor_reply_due_date || '-') + '</td><td class="px-3 py-2">' + lineReply + '</td><td class="px-3 py-2">' + (r.note || '') + '</td><td class="px-3 py-2">' + statusCell + '</td>';
+            requestListBody.appendChild(tr);
+          });
+          requestListBody.querySelectorAll('.btn-acknowledge').forEach(function (btn) {
+            btn.addEventListener('click', async function () {
+              const id = btn.dataset.requestId;
+              if (!id) return;
+              try {
+                const res = await fetch('/api/unmanaged-order-requests/' + id + '/acknowledge', { method: 'POST' });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || '削除に失敗しました。');
+                showToast(data.message || 'リストから削除しました。', 'success');
+                loadRequestList();
+              } catch (e) {
+                showToast(e.message || String(e), 'error');
+              }
+            });
+          });
+          requestListContainer.classList.remove('hidden');
+          setListUpdatedAt();
+        } catch (err) {
+          requestListLoading.classList.add('hidden');
+          requestListEmpty.classList.remove('hidden');
+          requestListEmpty.textContent = '一覧の取得に失敗しました。';
+          showToast('一覧の取得に失敗しました。', 'error');
+        }
+      }
+
+      function openDialog() {
+        if (requestedAtEl && !requestedAtEl.value) requestedAtEl.value = today;
+        requestDialog.classList.remove('hidden');
+        requestDialog.classList.add('flex');
+      }
+      function closeDialog() {
+        requestDialog.classList.add('hidden');
+        requestDialog.classList.remove('flex');
+      }
+
+      btnOpenDialog?.addEventListener('click', openDialog);
+      btnCloseDialog?.addEventListener('click', closeDialog);
+      btnDialogCancel?.addEventListener('click', closeDialog);
+      requestDialog?.addEventListener('click', function (e) {
+        if (e.target === requestDialog) closeDialog();
+      });
+
+      const requestedAtEl = document.getElementById('requested-at');
+      btnDialogClear?.addEventListener('click', function () {
+        document.getElementById('order-request-form')?.reset();
+        if (itemIdEl) itemIdEl.value = '';
+        if (requestedAtEl) requestedAtEl.value = today;
+      });
+
+      itemSearchEl?.addEventListener('input', function () {
+        itemIdEl.value = '';
+        if (searchTimeout) clearTimeout(searchTimeout);
+        const q = (itemSearchEl.value || '').trim();
+        if (q.length < 1) {
+          autocompleteDiv.classList.add('hidden');
+          autocompleteDiv.innerHTML = '';
+          return;
+        }
+        searchTimeout = setTimeout(async function () {
+          try {
+            const res = await fetch('/api/items/search?q=' + encodeURIComponent(q) + '&limit=20');
+            const data = await res.json();
+            const items = data.items || [];
+            autocompleteDiv.innerHTML = '';
+            if (items.length === 0) {
+              autocompleteDiv.classList.add('hidden');
+              return;
+            }
+            items.forEach(function (item) {
+              const row = document.createElement('button');
+              row.type = 'button';
+              row.className = 'w-full text-left px-3 py-2 hover:bg-slate-50 border-b border-slate-100 last:border-0';
+              row.innerHTML = '<span class="font-medium">' + (item.item_code || '') + '</span>';
+              row.dataset.id = item.id;
+              row.dataset.itemCode = item.item_code || '';
+              row.dataset.name = item.name || '';
+              row.dataset.manufacturer = item.manufacturer || '';
+              row.addEventListener('click', function (e) {
+                e.preventDefault();
+                itemIdEl.value = item.id;
+                itemSearchEl.value = item.item_code || '';
+                manufacturerEl.value = item.manufacturer || '';
+                autocompleteDiv.classList.add('hidden');
+                autocompleteDiv.innerHTML = '';
+              });
+              autocompleteDiv.appendChild(row);
+            });
+            autocompleteDiv.classList.remove('hidden');
+          } catch (err) {
+            autocompleteDiv.classList.add('hidden');
+          }
+        }, 200);
+      });
+      itemSearchEl?.addEventListener('blur', function () {
+        setTimeout(function () { autocompleteDiv.classList.add('hidden'); }, 150);
+      });
+
+      document.getElementById('order-request-form')?.addEventListener('submit', async function (e) {
+        e.preventDefault();
+        const quantity = parseInt(document.getElementById('quantity').value, 10) || 1;
+        if (quantity < 1) {
+          showToast('注文数量は1以上で指定してください。', 'error');
+          return;
+        }
+        const requestedDept = (document.getElementById('requested-department').value || '').trim();
+        if (!requestedDept) {
+          showToast('依頼部署を選択してください。', 'error');
+          return;
+        }
+        const itemIdVal = (itemIdEl.value || '').trim();
+        const itemId = itemIdVal ? parseInt(itemIdVal, 10) : null;
+        const itemCodeFree = itemId == null ? (itemSearchEl.value || '').trim() : '';
+        if (!itemId && !itemCodeFree) {
+          showToast('品番を入力するか、マスタから選択してください。', 'error');
+          return;
+        }
+        const payload = {
+          requested_at: document.getElementById('requested-at').value,
+          requested_department: requestedDept,
+          requested_by: (document.getElementById('requested-by').value || '').trim() || null,
+          item_id: itemId,
+          item_code_free: itemCodeFree || null,
+          manufacturer: (manufacturerEl.value || '').trim() || null,
+          quantity: quantity,
+          usage_destination: (usageDestEl.value || '').trim() || null,
+          note: (document.getElementById('note').value || '').trim() || null,
+          vendor_reply_due_date: (document.getElementById('vendor-reply-due-date').value || '').trim() || null,
+        };
+        try {
+          const res = await fetch('/api/unmanaged-order-requests', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          const data = await res.json();
+          if (!res.ok) {
+            throw new Error(data.detail || '登録に失敗しました。');
+          }
+          showToast(data.message || '依頼を登録しました。', 'success');
+          closeDialog();
+          document.getElementById('order-request-form').reset();
+          if (requestedAtEl) requestedAtEl.value = today;
+          itemIdEl.value = '';
+          loadRequestList();
+        } catch (err) {
+          showToast(err.message || String(err), 'error');
+        }
+      });
+
+      loadRequestList();
+    })();
+  </script>
+</body>
+</html>

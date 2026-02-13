@@ -1,7 +1,9 @@
 """
-履歴を全て削除するスクリプト（在庫取引＋発注）。
+履歴を全て削除するスクリプト（在庫取引＋発注＋依頼一覧＋購入実績）。
 
 - 対象:
+  - 管理外発注依頼（unmanaged_order_requests）※依頼一覧のリストデータ
+  - 購入実績（purchase_results）※購入実績一覧のリストデータ
   - 在庫トランザクション（inventory_transactions）
   - メール送信ログ（email_send_logs）
   - 注文書（purchase_order_documents）
@@ -25,6 +27,8 @@ from app.models.tables import (
     PurchaseOrder,
     PurchaseOrderDocument,
     PurchaseOrderLine,
+    PurchaseResult,
+    UnmanagedOrderRequest,
 )
 
 
@@ -32,20 +36,22 @@ def main() -> None:
     force = "--yes" in sys.argv or "-y" in sys.argv
     init_db()
     with SessionLocal() as session:
+        count_requests = session.scalar(select(func.count()).select_from(UnmanagedOrderRequest)) or 0
+        count_results = session.scalar(select(func.count()).select_from(PurchaseResult)) or 0
         count_logs = session.scalar(select(func.count()).select_from(EmailSendLog)) or 0
         count_docs = session.scalar(select(func.count()).select_from(PurchaseOrderDocument)) or 0
         count_lines = session.scalar(select(func.count()).select_from(PurchaseOrderLine)) or 0
         count_orders = session.scalar(select(func.count()).select_from(PurchaseOrder)) or 0
         count_txs = session.scalar(select(func.count()).select_from(InventoryTransaction)) or 0
-        total = count_logs + count_docs + count_lines + count_orders + count_txs
+        total = count_requests + count_results + count_logs + count_docs + count_lines + count_orders + count_txs
         if total == 0:
             print("履歴は既に0件です。")
             return
         if not force:
             print(
                 f"以下の履歴を全件削除します: "
-                f"発注={count_orders}, 明細={count_lines}, 注文書={count_docs}, "
-                f"メールログ={count_logs}, 在庫取引={count_txs}"
+                f"依頼一覧={count_requests}, 購入実績={count_results}, 発注={count_orders}, 明細={count_lines}, "
+                f"注文書={count_docs}, メールログ={count_logs}, 在庫取引={count_txs}"
             )
             try:
                 answer = input("よろしいですか？ [y/N]: ")
@@ -55,7 +61,9 @@ def main() -> None:
                 print("キャンセルしました。")
                 return
 
-        # 外部キー順に削除
+        # 外部キー順に削除（依頼一覧は発注を参照するため先に削除）
+        session.execute(delete(UnmanagedOrderRequest))
+        session.execute(delete(PurchaseResult))
         session.execute(delete(EmailSendLog))
         session.execute(delete(PurchaseOrderDocument))
         session.execute(delete(PurchaseOrderLine))
@@ -63,8 +71,9 @@ def main() -> None:
         session.execute(delete(InventoryTransaction))
         session.commit()
         print(
-            f"履歴を削除しました: 発注 {count_orders} 件, 明細 {count_lines} 件, "
-            f"注文書 {count_docs} 件, メールログ {count_logs} 件, 在庫取引 {count_txs} 件"
+            f"履歴を削除しました: 依頼一覧 {count_requests} 件, 購入実績 {count_results} 件, "
+            f"発注 {count_orders} 件, 明細 {count_lines} 件, 注文書 {count_docs} 件, "
+            f"メールログ {count_logs} 件, 在庫取引 {count_txs} 件"
         )
 
 
