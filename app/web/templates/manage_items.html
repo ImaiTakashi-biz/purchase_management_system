@@ -483,12 +483,34 @@
       });
       itemReset?.addEventListener('click', resetItemForm);
 
+      async function doDelete(id, unlinkOrderLines) {
+        const label = `${itemCodeInput.value.trim() || ''} ${itemTypeInput.value.trim() || ''}`.trim() || '（品番・品名なし）';
+        setLoading(true, unlinkOrderLines ? '紐づきを外して削除しています...' : '仕入品を削除しています...');
+        try {
+          const url = unlinkOrderLines ? `/api/items/${id}?unlink_order_lines=true` : `/api/items/${id}`;
+          const response = await fetch(url, { method: 'DELETE' });
+          const result = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(result.detail || '削除に失敗しました。');
+          resetItemForm();
+          reloadWithToast(result.message || '仕入品を削除しました。', 'success');
+        } catch (err) {
+          showToast(err.message || String(err), 'error');
+        } finally {
+          setLoading(false);
+        }
+      }
+
       itemDelete?.addEventListener('click', async () => {
         const id = itemIdInput.value.trim();
         if (!id) {
           showToast('削除する仕入品を一覧から選択してください。', 'error');
           return;
         }
+        const label = `${itemCodeInput.value.trim() || ''} ${itemTypeInput.value.trim() || ''}`.trim() || '（品番・品名なし）';
+        // 第1段階: 「削除しますか？」の確認
+        const ok1 = await openConfirmModal(`「${label}」を削除しますか？在庫・在庫履歴は削除されます。`, '削除');
+        if (!ok1) return;
+        // 第2段階: 紐づきがあれば「紐づきを外して削除」の確認
         let unlinkAndDelete = false;
         try {
           setLoading(true, '削除可否を確認しています...');
@@ -498,36 +520,19 @@
             showToast(canData.detail || '削除可否の確認に失敗しました。', 'error');
             return;
           }
-          if (canData.deletable === false && canData.reason) {
-            const label = `${itemCodeInput.value.trim() || ''} ${itemTypeInput.value.trim() || ''}`.trim() || '（品番・品名なし）';
-            const msg = `「${label}」は発注明細に紐づいているため通常は削除できません。\nテストデータの場合は「紐づきを外して削除」で発注明細の参照を外してから削除できます。実行しますか？`;
-            const ok = await openConfirmModal(msg, '紐づきを外して削除');
-            if (!ok) return;
+          const linkedCount = Number(canData.linked_order_lines_count) || 0;
+          const hasReason = (canData.reason && String(canData.reason).length > 0);
+          const isLinked = linkedCount > 0 || hasReason || canData.deletable === false || canData.deletable === 'false';
+          if (isLinked) {
+            const msg = `紐づきがあるため、削除するには「紐づきを外して削除」が必要です。\n「${label}」を紐づきを外して削除しますか？`;
+            const ok2 = await openConfirmModal(msg, '紐づきを外して削除');
+            if (!ok2) return;
             unlinkAndDelete = true;
           }
         } finally {
           setLoading(false);
         }
-        const label = `${itemCodeInput.value.trim() || ''} ${itemTypeInput.value.trim() || ''}`.trim() || '（品番・品名なし）';
-        if (!unlinkAndDelete) {
-          const ok = await openConfirmModal(`「${label}」を削除しますか？在庫・在庫履歴は削除されます。`, '削除');
-          if (!ok) return;
-        }
-        try {
-          setLoading(true, unlinkAndDelete ? '紐づきを外して削除しています...' : '仕入品を削除しています...');
-          const url = unlinkAndDelete ? `/api/items/${id}?unlink_order_lines=true` : `/api/items/${id}`;
-          const response = await fetch(url, { method: 'DELETE' });
-          const result = await response.json().catch(() => ({}));
-          if (!response.ok) {
-            throw new Error(result.detail || '削除に失敗しました。');
-          }
-          resetItemForm();
-          reloadWithToast(result.message || '仕入品を削除しました。', 'success');
-        } catch (error) {
-          showToast(error.message || String(error), 'error');
-        } finally {
-          setLoading(false);
-        }
+        await doDelete(id, unlinkAndDelete);
       });
 
       toggleReorderFieldsVisibility();

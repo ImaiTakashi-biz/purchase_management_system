@@ -35,7 +35,6 @@ from app.models.tables import (
     TransactionType,
     UnmanagedOrderRequest,
     UnmanagedOrderRequestStatus,
-    UnitPriceHistory,
     UserRole,
 )
 from app.services import PurchaseOrderError, PurchaseOrderService
@@ -3103,17 +3102,19 @@ def can_delete_item(
     db: Session = Depends(get_db),
     current_user: Dict[str, Any] = Depends(require_manager_user),
 ) -> Dict[str, object]:
-    """削除可否を返す。発注明細に紐づいている場合は削除不可。"""
+    """削除可否を返す。発注明細・購入実績のいずれかに紐づいている場合は削除不可。"""
     _ = current_user
     item = db.scalar(select(Item).filter(Item.id == item_id))
     if not item:
         raise HTTPException(status_code=404, detail='仕入品が見つかりません。')
     lines_count = db.scalar(select(func.count(PurchaseOrderLine.id)).where(PurchaseOrderLine.item_id == item_id))
-    if (lines_count or 0) > 0:
+    results_count = db.scalar(select(func.count(PurchaseResult.id)).where(PurchaseResult.item_id == item_id))
+    total_linked = (lines_count or 0) + (results_count or 0)
+    if total_linked > 0:
         return {
             'deletable': False,
-            'reason': 'この品目は発注明細に紐づいているため削除できません。発注の確定・入庫完了後に削除するか、該当発注明細を削除してから再度お試しください。',
-            'linked_order_lines_count': lines_count,
+            'reason': 'この品目は発注明細または購入実績に紐づいているため削除できません。テストデータの場合は「紐づきを外して削除」で参照を外してから削除できます。',
+            'linked_order_lines_count': (lines_count or 0) + (results_count or 0),
         }
     return {'deletable': True, 'reason': None}
 
@@ -3138,7 +3139,8 @@ def _unlink_item_from_related_then_delete(db: Session, item: Item) -> None:
         .where(UnmanagedOrderRequest.item_id == item.id)
         .values(item_id=None)
     )
-    db.execute(delete(UnitPriceHistory).where(UnitPriceHistory.item_id == item.id))
+    db.flush()
+    # Item に unit_price_history の cascade="all, delete-orphan" があるため、db.delete(item) で単価履歴もまとめて削除される
     db.delete(item)
 
 
@@ -3149,23 +3151,25 @@ def delete_item(
     db: Session = Depends(get_db),
     current_user: Dict[str, Any] = Depends(require_manager_user),
 ) -> Dict[str, object]:
-    """仕入品を削除する。発注明細に紐づいている場合は削除不可。unlink_order_lines=True のときは紐づきを外して削除する。"""
+    """仕入品を削除する。発注明細・購入実績に紐づいている場合は削除不可。unlink_order_lines=True のときは紐づきを外して削除する。"""
     _ = current_user
     item = db.scalar(select(Item).filter(Item.id == item_id))
     if not item:
         raise HTTPException(status_code=404, detail='仕入品が見つかりません。')
     lines_count = db.scalar(select(func.count(PurchaseOrderLine.id)).where(PurchaseOrderLine.item_id == item_id))
-    if (lines_count or 0) > 0:
+    results_count = db.scalar(select(func.count(PurchaseResult.id)).where(PurchaseResult.item_id == item_id))
+    total_linked = (lines_count or 0) + (results_count or 0)
+    if total_linked > 0:
         if unlink_order_lines:
             _unlink_item_from_related_then_delete(db, item)
             db.commit()
             return {
                 'id': item_id,
-                'message': f'仕入品を削除しました（発注明細 {lines_count} 件の紐づきを外しました）。',
+                'message': f'仕入品を削除しました（発注明細・購入実績 {total_linked} 件の紐づきを外しました）。',
             }
         raise HTTPException(
             status_code=400,
-            detail='この品目は発注明細に紐づいているため削除できません。発注の確定・入庫完了後に削除するか、該当発注明細を削除してから再度お試しください。テストデータの場合は「紐づきを外して削除」を利用できます。',
+            detail='この品目は発注明細または購入実績に紐づいているため削除できません。テストデータの場合は「紐づきを外して削除」を利用できます。',
         )
     db.delete(item)
     db.commit()

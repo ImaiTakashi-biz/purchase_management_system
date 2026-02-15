@@ -106,7 +106,9 @@ class Item(Base):
     )
     purchase_order_lines = relationship("PurchaseOrderLine", back_populates="item")
     purchase_results = relationship("PurchaseResult", back_populates="item")
-    unit_price_history = relationship("UnitPriceHistory", back_populates="item")
+    unit_price_history = relationship(
+        "UnitPriceHistory", back_populates="item", cascade="all, delete-orphan"
+    )
 
 
 class ItemSupplier(Base):
